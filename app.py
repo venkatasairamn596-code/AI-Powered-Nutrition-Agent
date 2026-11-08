@@ -1,0 +1,396 @@
+"""
+Nutrition Agent - Streamlit Application
+IBM SkillsBuild Agentic AI Internship
+"""
+
+import streamlit as st
+import os
+from modules.watsonx_client import WatsonxGraniteClient
+from agents import (
+    NutritionKnowledgeAssistant,
+    SAFETY_DISCLAIMER,
+    PersonalisedDietPlanner,
+    PLANNER_SAFETY_DISCLAIMER,
+)
+
+# Page configuration
+st.set_page_config(
+    page_title="Nutrition Agent - IBM SkillsBuild",
+    page_icon="🥗",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def main():
+    # Sidebar navigation
+    st.sidebar.title("🥗 Nutrition Agent")
+    st.sidebar.markdown("**IBM SkillsBuild Agentic AI Internship**")
+    st.sidebar.divider()
+
+    menu_selection = st.sidebar.radio(
+        "Navigation",
+        [
+            "🏠 Welcome & Overview",
+            "1️⃣ Nutrition Knowledge Assistant",
+            "2️⃣ Personalised Diet Planner",
+            "3️⃣ Food Intake Analyzer",
+            "4️⃣ General Health Advisor",
+            "⚙️ Integration Status",
+        ],
+    )
+
+    client = WatsonxGraniteClient()
+    config_status = client.get_configuration_status()
+
+    # Route navigation
+    if menu_selection == "🏠 Welcome & Overview":
+        render_welcome_page(config_status)
+    elif menu_selection == "1️⃣ Nutrition Knowledge Assistant":
+        render_knowledge_assistant(client)
+    elif menu_selection == "2️⃣ Personalised Diet Planner":
+        render_diet_planner(client)
+    elif menu_selection == "⚙️ Integration Status":
+        render_status_page(client, config_status)
+    else:
+        render_feature_placeholder(menu_selection)
+
+
+def render_welcome_page(config_status: dict):
+    st.title("🥗 Welcome to Nutrition Agent")
+    st.caption("AI-Powered Dietary & Wellness Companion | Powered by IBM Granite & watsonx.ai")
+
+    st.markdown(
+        """
+    Welcome to the **Nutrition Agent** project workspace! This application is designed to provide 
+    evidence-based dietary planning, nutrition question answering, and food intake evaluation 
+    using **IBM Granite** foundation models and **Retrieval-Augmented Generation (RAG)**.
+    """
+    )
+
+    st.divider()
+
+    # Planned Features Grid
+    st.subheader("🎯 Core Application Capabilities")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        with st.container(border=True):
+            st.markdown("### 1. 📖 Nutrition Knowledge Assistant")
+            st.markdown(
+                """
+                - Answers evidence-based questions about nutrients, vitamins, and minerals.
+                - Powered by **RAG** over curated nutritional guidelines (WHO, ICMR, USDA).
+                - *Status: Ready for agent pipeline integration.*
+                """
+            )
+
+        with st.container(border=True):
+            st.markdown("### 2. 📋 Personalised Diet Planner")
+            st.markdown(
+                """
+                - Generates tailored daily/weekly meal schedules.
+                - Accommodates dietary restrictions, health goals, and personal preferences.
+                - *Status: Ready for agent pipeline integration.*
+                """
+            )
+
+    with col2:
+        with st.container(border=True):
+            st.markdown("### 3. 🔍 Food Intake Analyzer")
+            st.markdown(
+                """
+                - Breaks down logged meals into macronutrients and calorie estimations.
+                - Identifies potential nutritional deficiencies or surpluses.
+                - *Status: Ready for agent pipeline integration.*
+                """
+            )
+
+        with st.container(border=True):
+            st.markdown("### 4. 💡 General Health & Nutrition Advisor")
+            st.markdown(
+                """
+                - Offers lifestyle guidance, hydration tracking, and general wellness habits.
+                - Non-diagnostic wellness support grounded in verified knowledge.
+                - *Status: Ready for agent pipeline integration.*
+                """
+            )
+
+    st.divider()
+
+    # Technology Stack & Setup Overview
+    st.subheader("🛠️ Technology Architecture")
+    tech_col1, tech_col2, tech_col3 = st.columns(3)
+
+    with tech_col1:
+        st.markdown("**LLM Foundation**")
+        st.write("• IBM Granite Models")
+        st.write("• IBM watsonx.ai SDK")
+
+    with tech_col2:
+        st.markdown("**Orchestration & RAG**")
+        st.write("• LangFlow Workflows")
+        st.write("• Grounded Nutrition Knowledge Base")
+
+    with tech_col3:
+        st.markdown("**User Experience**")
+        st.write("• Streamlit Interactive Web App")
+        st.write("• Python 3 Modular Architecture")
+
+
+def render_knowledge_assistant(client: WatsonxGraniteClient):
+    st.title("📖 Nutrition Knowledge Assistant")
+    st.caption("Evidence-Based Nutrition Guidance Grounded in WHO, ICMR-NIN & USDA Standards | Powered by IBM Granite & RAG")
+
+    st.warning(SAFETY_DISCLAIMER)
+
+    sample_questions = [
+        "Select a sample question or type below...",
+        "What is the recommended daily intake of free sugars according to WHO?",
+        "How much protein should an adult consume daily according to ICMR-NIN guidelines?",
+        "What are the WHO recommendations for daily sodium and salt intake?",
+        "How much water should an adult drink daily?",
+        "What are the dietary fiber recommendations according to dietary guidelines?",
+        "What are the essential micronutrients vulnerable to widespread deficiency?",
+    ]
+
+    selected_sample = st.selectbox("💡 Quick Sample Questions:", sample_questions)
+
+    default_text = ""
+    if selected_sample != sample_questions[0]:
+        default_text = selected_sample
+
+    user_query = st.text_area(
+        "Enter your nutrition question:",
+        value=default_text,
+        placeholder="e.g. What are the healthy daily limits for salt and sugar?",
+        height=100,
+    )
+
+    col_btn, _ = st.columns([1, 4])
+    with col_btn:
+        search_clicked = st.button("🔍 Ask Nutrition Assistant", type="primary", use_container_width=True)
+
+    if search_clicked:
+        if not user_query.strip():
+            st.error("Please enter a nutrition question to search.")
+            return
+
+        assistant = NutritionKnowledgeAssistant(client=client)
+
+        with st.spinner("Retrieving verified guidelines and generating grounded response..."):
+            result = assistant.answer_question(user_query.strip())
+
+        # Display Section: Retrieved RAG Evidence
+        st.subheader("📚 Verified Dietary Evidence (RAG Context)")
+        retrieved_docs = result.get("retrieved_docs", [])
+
+        if retrieved_docs:
+            for doc in retrieved_docs:
+                with st.expander(f"📌 {doc.get('title')} ({doc.get('source')})", expanded=True):
+                    st.write(doc.get("content"))
+                    caption_text = f"**Authority:** {doc.get('source')} | **Topic:** {doc.get('topic')}"
+                    if doc.get("source_url"):
+                        caption_text += f" | 🔗 [Official Document Link]({doc.get('source_url')})"
+                    st.caption(caption_text)
+        else:
+            st.info("No specific guidelines retrieved for this topic.")
+
+        # Display Section: Model Answer / Status
+        st.divider()
+        st.subheader("🤖 Nutrition Assistant Guidance")
+
+        if result.get("used_live_model") and result.get("answer"):
+            st.success("✅ Grounded response generated by IBM Granite:")
+            st.markdown(result["answer"])
+        else:
+            st.info(f"ℹ️ {result.get('status_message', 'Awaiting live inference.')}")
+            if not result.get("used_live_model"):
+                st.markdown(
+                    """
+                    > **Note for watsonx.ai Live Generation**: 
+                    > The RAG context and grounded prompt pipeline are ready. When you associate your Watson Machine Learning (WML) service instance with the project in watsonx.ai, live Granite responses will appear directly here.
+                    """
+                )
+
+        # Citations
+        if result.get("sources"):
+            st.markdown("---")
+            st.markdown("**Cited Public Health Authorities:**")
+            for s in result["sources"]:
+                st.markdown(f"- 🏛️ `{s}`")
+
+        # Mandatory Safety Footer
+        st.caption(SAFETY_DISCLAIMER)
+
+
+def render_diet_planner(client: WatsonxGraniteClient):
+    st.title("📋 Personalised Diet Planner")
+    st.caption("Evidence-Grounded Indian Meal Planning Based on ICMR-NIN Guidelines | Powered by IBM Granite")
+
+    st.warning(PLANNER_SAFETY_DISCLAIMER)
+
+    planner = PersonalisedDietPlanner(client=client)
+
+    st.subheader("👤 User Profile & Dietary Requirements")
+
+    with st.container(border=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            age = st.number_input("Age (years):", min_value=10, max_value=115, value=25, step=1)
+            dietary_preference = st.selectbox(
+                "Dietary Preference:",
+                planner.VALID_DIET_PREFERENCES,
+                index=0,
+            )
+            activity_level = st.selectbox(
+                "Physical Activity Level:",
+                planner.VALID_ACTIVITY_LEVELS,
+                index=1,
+            )
+
+        with col2:
+            nutrition_goal = st.selectbox(
+                "Primary Nutrition Goal:",
+                planner.VALID_GOALS,
+                index=0,
+            )
+            food_allergies = st.text_input(
+                "Food Allergies to Exclude:",
+                placeholder="e.g. Peanuts, Dairy, Shellfish, Gluten, None",
+                help="List any allergens that must be strictly excluded from the meal plan.",
+            )
+            dietary_restrictions = st.text_input(
+                "Special Dietary Restrictions / Notes:",
+                placeholder="e.g. Low sodium, Diabetic-friendly, Lactose-free, None",
+            )
+
+        preferred_foods = st.text_input(
+            "Preferred Regional Indian Foods / Staples:",
+            placeholder="e.g. North Indian (Roti, Dal, Paneer), South Indian (Idli, Sambar, Rice), Millets (Ragi, Jowar)",
+            help="Tell the assistant what regional foods you prefer or normally have access to.",
+        )
+
+        generate_btn = st.button("🥗 Generate Personalised Meal Plan", type="primary", use_container_width=True)
+
+    if generate_btn:
+        profile = {
+            "age": int(age),
+            "dietary_preference": dietary_preference,
+            "activity_level": activity_level,
+            "nutrition_goal": nutrition_goal,
+            "food_allergies": food_allergies,
+            "dietary_restrictions": dietary_restrictions,
+            "preferred_foods": preferred_foods,
+        }
+
+        # Validate inputs first
+        is_valid, errors, warnings = planner.validate_inputs(profile)
+
+        if not is_valid:
+            for err in errors:
+                st.error(f"❌ {err}")
+            return
+
+        for warn in warnings:
+            st.warning(f"⚠️ {warn}")
+
+        with st.spinner("Retrieving ICMR-NIN evidence and generating personalized Indian meal plan with IBM Granite..."):
+            result = planner.generate_plan(profile)
+
+        if result.get("success") and result.get("meal_plan"):
+            st.success("✅ Personalised Indian Meal Plan Generated Successfully:")
+
+            with st.container(border=True):
+                st.markdown(result["meal_plan"])
+
+            # Retrieved evidence expander
+            if result.get("retrieved_docs"):
+                with st.expander("📚 Grounding Evidence (ICMR-NIN Guidelines Used)", expanded=False):
+                    for d in result["retrieved_docs"]:
+                        st.markdown(f"**{d.get('title')}** ({d.get('source')})")
+                        st.caption(d.get("content"))
+                        if d.get("source_url"):
+                            st.caption(f"🔗 [Official Publication]({d.get('source_url')})")
+                        st.divider()
+
+        else:
+            if result.get("allergen_blocked"):
+                st.error(result.get("status_message"))
+            else:
+                st.warning(f"Generation Notice: {result.get('status_message')}")
+            if result.get("retrieved_docs"):
+                with st.expander("📚 Retrieved Guidelines (RAG Context)", expanded=True):
+                    for d in result["retrieved_docs"]:
+                        st.write(f"**{d.get('title')}**: {d.get('content')}")
+
+        st.caption(PLANNER_SAFETY_DISCLAIMER)
+
+
+def render_feature_placeholder(feature_name: str):
+    st.title(feature_name)
+    st.info(
+        f"🚧 **{feature_name}** is currently in initial setup mode. "
+        "The agent logic and IBM Granite pipeline will be connected in upcoming stages."
+    )
+    st.markdown(
+        """
+        ### Next Steps for this Module:
+        1. Define domain prompts and LangFlow agent flow.
+        2. Ingest domain-specific nutrition guidelines into the `data/` directory for RAG.
+        3. Connect the IBM Granite model client from `modules/watsonx_client.py`.
+        """
+    )
+
+
+def render_status_page(client: WatsonxGraniteClient, config_status: dict):
+    st.title("⚙️ System & Integration Diagnostics")
+    st.markdown("Check project configuration and IBM watsonx.ai connectivity prerequisites.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("IBM watsonx.ai Configuration")
+        if config_status["is_ready"]:
+            st.success("✅ watsonx credentials are fully detected in environment!")
+        else:
+            st.warning("⚠️ watsonx credentials are not yet configured.")
+            st.caption(
+                "Copy `.env.example` to `.env` and fill in your `WATSONX_APIKEY` "
+                "and `WATSONX_PROJECT_ID`."
+            )
+
+        st.json(
+            {
+                "API Key Configured": config_status["has_api_key"],
+                "Project ID Configured": config_status["has_project_id"],
+                "Masked Project ID": config_status.get("project_id_masked", ""),
+                "Endpoint URL": config_status["service_url"],
+                "Target Granite Model": config_status["target_model"],
+            }
+        )
+
+        st.markdown("---")
+        st.markdown("#### Test Connectivity")
+        st.caption("Verifies authentication with IBM watsonx.ai without running paid inference.")
+
+        if st.button("🔌 Test watsonx Connection", use_container_width=True):
+            with st.spinner("Checking IBM watsonx.ai connectivity..."):
+                test_result = client.test_connection()
+                if test_result["success"]:
+                    st.success(f"✅ {test_result['message']}")
+                else:
+                    st.warning(f"⚠️ {test_result['message']}")
+
+    with col2:
+        st.subheader("Workspace Directory Health")
+        folders = ["agents", "data", "documentation", "modules", "tests"]
+        folder_health = {}
+        for f in folders:
+            folder_health[f] = "✅ Present" if os.path.isdir(f) else "❌ Missing"
+        st.json(folder_health)
+
+
+if __name__ == "__main__":
+    main()

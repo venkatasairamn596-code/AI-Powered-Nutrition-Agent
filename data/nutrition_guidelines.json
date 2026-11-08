@@ -1,0 +1,110 @@
+[
+  {
+    "id": "who-free-sugars",
+    "topic": "Sugars and Sweeteners",
+    "title": "WHO Guideline: Free Sugars Intake for Adults and Children",
+    "source_organization": "World Health Organization (WHO)",
+    "publication_year": 2015,
+    "document_name": "Guideline: Sugars Intake for Adults and Children (WHO Guidelines Approved by the Guidelines Review Committee)",
+    "source_url": "https://www.who.int/publications/i/item/9789241549028",
+    "source": "World Health Organization (WHO) Guidelines, 2015/2023",
+    "content": "WHO provides population-level guidance strongly recommending that the intake of free sugars be reduced to less than 10% of total daily energy intake for both adults and children. A conditional recommendation targets a further reduction to below 5% of total daily energy (approximately 25 grams or 6 level teaspoons per day for an adult on a 2,000 kcal diet) to provide additional protection against dental caries and unhealthy weight gain. Free sugars encompass all monosaccharides and disaccharides added to foods and drinks by manufacturers, cooks, or consumers, as well as sugars naturally present in honey, syrups, fruit juices, and fruit juice concentrates. Intrinsic sugars within whole fresh fruits and vegetables are not classified as free sugars. Note: These figures represent population thresholds to curb non-communicable diseases; individual energy and sugar allowances vary based on metabolic health, activity levels, and clinical considerations.",
+    "keywords": ["sugar", "free sugars", "sweeteners", "carbohydrates", "energy", "calories", "who", "dental caries", "glucose", "fructose"]
+  },
+  {
+    "id": "who-sodium-salt",
+    "topic": "Sodium and Salt Intake",
+    "title": "WHO Guideline: Sodium and Salt Reduction for Cardiovascular Health",
+    "source_organization": "World Health Organization (WHO)",
+    "publication_year": 2023,
+    "document_name": "WHO Global Report on Sodium Intake Reduction (2023) & Guideline: Sodium Intake for Adults and Children (2012)",
+    "source_url": "https://www.who.int/publications/i/item/9789240069985",
+    "source": "World Health Organization (WHO) Sodium Intake Guidelines, 2023",
+    "content": "As a population-wide public health benchmark, WHO recommends that adults consume less than 2,000 mg of sodium per day, which corresponds to less than 5 grams of total salt (approximately one level teaspoon). For children, the recommended maximum limit is adjusted downward based on body size and daily energy requirements. High sodium intake combined with inadequate potassium intake (WHO recommends at least 3,510 mg potassium daily for adults) is a primary risk factor for elevated blood pressure, cardiovascular disease, and stroke. All salt consumed for food preparation should be iodized to support thyroid function and cognitive development. Note: This population upper threshold is not an individualized clinical prescription; patients with renal disease, heart failure, or specific medical conditions require individualized electrolyte management under clinical supervision.",
+    "keywords": ["sodium", "salt", "blood pressure", "hypertension", "potassium", "heart disease", "cardiovascular", "who", "iodine"]
+  },
+  {
+    "id": "who-dietary-fats",
+    "topic": "Dietary Fats and Lipids",
+    "title": "WHO Guideline: Saturated Fatty Acid and Trans-Fatty Acid Intake",
+    "source_organization": "World Health Organization (WHO)",
+    "publication_year": 2023,
+    "document_name": "Saturated Fatty Acid and Trans-Fatty Acid Intake for Adults and Children: WHO Guideline (July 2023)",
+    "source_url": "https://www.who.int/publications/i/item/9789240073630",
+    "source": "World Health Organization (WHO) Guidelines on Dietary Fats, 2023",
+    "content": "WHO population guidance recommends that total fat intake should not exceed 30% of total daily energy intake to prevent unhealthy weight gain in adults. Saturated fatty acids should be restricted to less than 10% of total energy intake, and trans-fatty acids should be kept below 1% of total energy intake. WHO strongly advises that saturated fats should be replaced primarily with polyunsaturated and monounsaturated fatty acids from plant-based sources (nuts, seeds, olive, canola, and sunflower oils, and oily fish). Industrially produced trans-fats must be completely eliminated. Note: These percentage ranges are general population dietary distribution guidelines; individual lipid requirements and targets differ based on cardiovascular risk profiles, age, and metabolic status.",
+    "keywords": ["fat", "fats", "saturated fatty acids", "trans fats", "unsaturated fats", "polyunsaturated", "monounsaturated", "omega-3", "cholesterol", "who"]
+  },
+  {
+    "id": "icmr-macronutrients",
+    "topic": "Macronutrient Distribution",
+    "title": "ICMR-NIN Dietary Guidelines for Indians: Balanced Macronutrient Ratios",
+    "source_organization": "ICMR - National Institute of Nutrition (NIN)",
+    "publication_year": 2024,
+    "document_name": "Dietary Guidelines for Indians (17 Guidelines by ICMR-NIN, Hyderabad, May 2024)",
+    "source_url": "https://www.nin.res.in/dietaryguidelines/",
+    "source": "ICMR - National Institute of Nutrition (NIN) Dietary Guidelines, 2024",
+    "content": "For the Indian population, the 2024 revised ICMR-NIN Dietary Guidelines recommend deriving 50% to 56% of total daily energy from carbohydrates, 10% to 15% from protein, and 20% to 30% from healthy dietary fats. Total energy contribution from cereals and millets should not exceed 45% to 50% of daily calories to avoid carbohydrate-induced metabolic dysfunction. At least 50% of daily cereal intake should comprise whole grains and traditionally cultivated nutri-cereals/millets (ragi, jowar, bajra) rather than refined carbohydrates (white flour, polished rice). Pulses and flesh foods should supply 14% to 15% of daily energy. Note: These macronutrient distribution ranges represent population dietary targets for healthy adults; individualized macronutrient splits must be customized based on an individual's glycemic status, insulin sensitivity, physical activity, and body composition.",
+    "keywords": ["icmr", "nin", "india", "carbohydrates", "protein", "fats", "macronutrients", "millets", "whole grains", "ragi", "jowar", "balanced diet"]
+  },
+  {
+    "id": "icmr-protein-requirements",
+    "topic": "Protein Recommendations",
+    "title": "ICMR-NIN Recommended Dietary Allowance (RDA) for Protein in Adults",
+    "source_organization": "ICMR - National Institute of Nutrition (NIN)",
+    "publication_year": 2024,
+    "document_name": "Nutrient Requirements for Indians (RDA Report, ICMR-NIN 2020 / reaffirmed in 2024 Guidelines)",
+    "source_url": "https://www.nin.res.in/",
+    "source": "ICMR - National Institute of Nutrition (NIN) RDA Guidelines, 2020/2024",
+    "content": "The official ICMR-NIN Recommended Dietary Allowance (RDA) for protein for healthy Indian adults is a population benchmark of 0.83 grams per kilogram of body weight per day. Applied to standard Indian Reference Adult weights (Reference Man = 65 kg; Reference Woman = 55 kg), the reference daily protein intake is approximately 54 grams per day for adult men and 46 grams per day for adult non-pregnant/non-lactating women. For plant-based diets, ICMR-NIN recommends combining cereals and pulses in a 3:1 ratio (by weight) to achieve a complete essential amino acid profile. Note: An RDA is a population-level statistical estimate designed to meet the physiological requirements of 97.5% of healthy individuals. It is not an individual prescription: actual protein needs vary widely according to body composition, physical training intensity, recovery requirements, age, and clinical conditions.",
+    "keywords": ["protein", "amino acids", "icmr", "nin", "pulses", "dal", "dairy", "eggs", "muscle", "rda", "nitrogen balance"]
+  },
+  {
+    "id": "icmr-hydration-water",
+    "topic": "Hydration and Fluids",
+    "title": "ICMR-NIN Guidelines on Daily Water and Fluid Requirements",
+    "source_organization": "ICMR - National Institute of Nutrition (NIN)",
+    "publication_year": 2024,
+    "document_name": "Dietary Guidelines for Indians, Guideline 11: Consume Safe and Clean Water (ICMR-NIN, 2024)",
+    "source_url": "https://www.nin.res.in/dietaryguidelines/",
+    "source": "ICMR - National Institute of Nutrition (NIN) Guidelines, 2024",
+    "content": "Under Guideline 11 of the 2024 ICMR-NIN Dietary Guidelines, sedentary adults in temperate climates require an average daily fluid intake of approximately 2.0 to 2.5 liters (about 8 to 10 glasses, or 30 to 35 ml per kilogram of body weight). During hot or humid weather, vigorous physical exertion, or heavy labor, daily fluid needs increase significantly to between 3.0 and 4.0 liters per day to balance sweat losses. Recommended healthy hydration options include clean drinking water, unsweetened buttermilk, thin rasam, coconut water, and lemon water. Commercial sugar-sweetened beverages and energy drinks should be avoided. Note: Fluid requirements are highly individualized and fluctuate based on body weight, ambient humidity, sweat rates, metabolic demand, kidney function, and cardiac health.",
+    "keywords": ["water", "hydration", "fluid", "liquids", "thirst", "icmr", "nin", "dehydration", "electrolytes"]
+  },
+  {
+    "id": "usda-dietary-fiber",
+    "topic": "Dietary Fiber and Gut Health",
+    "title": "Dietary Guidelines for Americans: Dietary Fiber Intake and Whole-Food Sources",
+    "source_organization": "USDA & HHS",
+    "publication_year": 2025,
+    "document_name": "Dietary Guidelines for Americans, 2025–2030 (10th Edition, U.S. Department of Agriculture & U.S. Department of Health and Human Services)",
+    "source_url": "https://www.fns.usda.gov/cnpp/dietary-guidelines-americans",
+    "source": "USDA & HHS Dietary Guidelines for Americans, 2025–2030",
+    "content": "In the Dietary Guidelines for Americans (2025–2030 edition), dietary fiber remains identified as a dietary component of public health concern for underconsumption across all age groups. Federal guidance references the established Dietary Reference Intake (DRI) benchmark of 14 grams of dietary fiber per 1,000 kilocalories consumed. At the population level, this corresponds to approximate daily targets of 22 to 28 grams per day for adult women and 28 to 34 grams per day for adult men, depending on age category and overall daily caloric needs. Over 90% of adults do not meet recommended fiber intakes. Soluble fiber (found in oats, barley, legumes, and apples) aids in modulating serum cholesterol and attenuating postprandial blood glucose, while insoluble fiber (found in whole grains, bran, vegetables, and seeds) promotes gastrointestinal regularity and supports the gut microbiome. Note: These represent general dietary reference benchmarks; individual fiber tolerance and requirements vary according to digestive health, fluid intake, and clinical conditions.",
+    "keywords": ["fiber", "dietary fiber", "gut health", "digestion", "bowel motility", "cholesterol", "usda", "oats", "prebiotics", "dga 2025-2030"]
+  },
+  {
+    "id": "who-icmr-fruits-vegetables",
+    "topic": "Fruits and Vegetables",
+    "title": "WHO & ICMR-NIN Recommendations on Daily Vegetable and Fruit Intake",
+    "source_organization": "World Health Organization (WHO) & ICMR-NIN",
+    "publication_year": 2024,
+    "document_name": "WHO Healthy Diet Guidance (2023) & ICMR-NIN Dietary Guidelines for Indians, Guideline 3 (2024)",
+    "source_url": "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
+    "source": "WHO & ICMR-NIN Dietary Guidelines, 2023/2024",
+    "content": "WHO recommends that adults consume at least 400 grams (approximately 5 portions of 80 grams each) of vegetables and fruits per day, excluding starchy roots such as potatoes and cassava, to reduce the risk of non-communicable diseases. For the Indian population, ICMR-NIN 2024 (Guideline 3) establishes a general daily target of 400 to 500 grams of vegetables and fruits: consisting of at least 100 grams of dark green leafy vegetables, 100 grams of roots and tubers, 100 to 200 grams of other vegetables, and 100 to 150 grams of fresh seasonal fruits. Consuming diverse natural colors provides essential micronutrients, dietary fiber, and protective phytochemicals. Note: These are population dietary targets; specific portion allocations should be adapted to individual energy needs, digestive tolerance, and metabolic goals.",
+    "keywords": ["vegetables", "fruits", "antioxidants", "flavonoids", "greens", "phytochemicals", "icmr", "who", "micronutrients"]
+  },
+  {
+    "id": "who-micronutrients-vitamins",
+    "topic": "Vitamins and Minerals",
+    "title": "WHO Guidelines on Essential Micronutrients and Preventable Deficiencies",
+    "source_organization": "World Health Organization (WHO)",
+    "publication_year": 2023,
+    "document_name": "WHO Micronutrient Facts and Global Nutrition Target Targets (WHO, 2023)",
+    "source_url": "https://www.who.int/health-topics/micronutrients",
+    "source": "World Health Organization (WHO) Micronutrient Fact Sheets, 2023",
+    "content": "Micronutrients (vitamins and essential minerals) are vital for enzymatic regulation, immune function, and cellular health. Global public health surveillance highlights four priority micronutrient deficiencies: 1) Iron (preventing nutritional iron-deficiency anemia, which affects over 30% of women of reproductive age globally); 2) Vitamin A (preventing preventable childhood blindness and supporting epithelial immune defenses); 3) Iodine (crucial for thyroid hormone synthesis and preventing intellectual impairment); and 4) Vitamin D and Calcium (essential for bone mineral density, osteomalacia prevention, and skeletal integrity). A varied diet containing colorful produce, legumes, fortified staples, and safe sunlight exposure is the primary population strategy. Note: Micronutrient requirements vary significantly across age, sex, pregnancy, lactation, and clinical conditions; specific deficiencies require professional clinical diagnosis and tailored therapeutic supplementation.",
+    "keywords": ["vitamins", "minerals", "micronutrients", "iron", "anemia", "vitamin a", "vitamin d", "iodine", "calcium", "immunity", "who"]
+  }
+]
