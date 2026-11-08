@@ -853,4 +853,230 @@ def test_food_intake_analyzer_safety_disclaimers():
     assert "IFCT 2017" in summary["disclaimer_label"]
 
 
+def test_general_health_advisor_normal_question_and_rag():
+    """
+    Test standard everyday nutrition question with RAG evidence and mock Granite response.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor, ADVISOR_SAFETY_DISCLAIMER
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_response.return_value = (
+        "Hydration Advice: Drinking approximately 2 to 2.5 liters of fluids daily supports metabolic function. "
+        "Unsweetened tea counts toward hydration, though pure water should remain your core source."
+    )
+
+    advisor = GeneralHealthAdvisor(client=mock_client)
+    res = advisor.advise(
+        query="How much water should I drink every day and does tea count?",
+        age_group="Young Adult / College (18–25)",
+        user_context="Desk worker sitting 7 hours a day",
+    )
+
+    assert res["success"] is True
+    assert res["used_live_model"] is True
+    assert "Hydration Advice" in res["answer"]
+    assert len(res["retrieved_docs"]) > 0
+    assert any("water" in d["content"].lower() or "hydration" in d["content"].lower() for d in res["retrieved_docs"])
+    assert "Educational Disclaimer" in res["disclaimer"]
+
+
+def test_general_health_advisor_source_attribution():
+    """
+    Verify that retrieved guidelines contain official title, organization, year, and URL.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+    docs = advisor.retrieve_evidence("balanced diet millets protein")
+
+    assert len(docs) > 0
+    for d in docs:
+        assert d.get("title")
+        assert d.get("source_organization")
+        assert d.get("publication_year") >= 2015
+        assert d.get("source_url", "").startswith("https://")
+
+
+def test_general_health_advisor_missing_evidence_handling():
+    """
+    Verify handling when a query does not match any specific guideline.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_response.return_value = "General advice based on public health principles."
+
+    advisor = GeneralHealthAdvisor(client=mock_client)
+    # Query completely unrelated to nutrition guidelines
+    prompt = advisor.build_prompt(
+        query="What is quantum computing?",
+        age_group="Prefer not to say",
+        user_context="",
+        evidence_context="",
+        has_evidence=False,
+    )
+
+    assert "No direct guideline match found" in prompt
+    assert "Rely strictly on general public health principles" in prompt
+
+
+def test_general_health_advisor_inference_failure_handling():
+    """
+    Ensure IBM Granite network or quota failures do NOT fabricate fake AI responses.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    # Exception during generation
+    mock_failing_client = MagicMock()
+    mock_failing_client.is_configured.return_value = True
+    mock_failing_client.generate_response.side_effect = RuntimeError("watsonx connection timeout")
+
+    advisor = GeneralHealthAdvisor(client=mock_failing_client)
+    res = advisor.advise(query="How to avoid afternoon energy crashes?")
+
+    assert res["success"] is False
+    assert res["answer"] is None
+    assert "connection timeout" in res["status_message"]
+
+    # Unconfigured client
+    unconf_client = WatsonxGraniteClient(api_key="", project_id="")
+    advisor_unconf = GeneralHealthAdvisor(client=unconf_client)
+    res_unconf = advisor_unconf.advise(query="How to balance meals?")
+    assert res_unconf["success"] is False
+    assert res_unconf["answer"] is None
+    assert "not configured" in res_unconf["status_message"]
+
+
+def test_general_health_advisor_urgent_symptoms_escalation():
+    """
+    Verify acute medical emergencies immediately bypass dietary advice and trigger emergency guidance.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+    urgent_queries = [
+        "I am having severe chest pain and shortness of breath, what should I eat?",
+        "Sudden numbness in my arm and blood in vomit",
+        "My friend fainted and has swelling of lips from severe allergic reaction",
+    ]
+
+    for q in urgent_queries:
+        res = advisor.advise(query=q)
+        assert res["success"] is True
+        assert res["used_live_model"] is False  # Must NOT make model calls for emergencies!
+        assert res["risk_assessment"]["risk_level"] == "urgent"
+        assert "IMMEDIATE MEDICAL ATTENTION REQUIRED" in res["answer"]
+        assert "emergency" in res["answer"].lower()
+
+
+def test_general_health_advisor_clinical_escalation():
+    """
+    Verify pregnancy, chronic diseases, and eating disorders trigger clinical consultation advisories.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+
+    cases = [
+        ("I am pregnant in my second trimester, should I fast?", "pregnancy"),
+        ("I have chronic kidney disease on dialysis, what fruit to eat?", "chronic_disease"),
+        ("I have been starving myself and purging, how to lose more weight?", "eating_disorder"),
+    ]
+
+    for q, expected_cat in cases:
+        risk = advisor.detect_safety_risks(q)
+        assert risk["risk_level"] == "clinical"
+        assert risk["category"] == expected_cat
+        assert risk["advisory"] is not None
+
+
+def test_general_health_advisor_prohibited_prescription_requests():
+    """
+    Verify medication and supplement dosage prescription requests are rejected.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+    prohibited_queries = [
+        "What medicine should I take for hypertension?",
+        "What dosage of vitamin D drug should I take to cure my fatigue?",
+        "Diagnose me: do I have scurvy?",
+    ]
+
+    for q in prohibited_queries:
+        risk = advisor.detect_safety_risks(q)
+        assert risk["risk_level"] == "prohibited_prescription"
+        assert "Professional Scope Notice" in risk["advisory"]
+
+
+def test_general_health_advisor_empty_input():
+    """
+    Verify empty or whitespace query is rejected cleanly before any model call.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+    res = advisor.advise(query="   ")
+    assert res["success"] is False
+    assert "valid question" in res["status_message"].lower()
+    assert res["answer"] is None
+
+
+def test_general_health_advisor_severe_allergies_and_special_populations():
+    """
+    Verify severe allergies, young children, and older adults with dysphagia trigger clinical advisories.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+
+    # 1. Severe food allergy
+    risk_allergy = advisor.detect_safety_risks("I have a severe food allergy to peanuts and carry an epipen, can I eat bakery sweets?")
+    assert risk_allergy["risk_level"] == "clinical"
+    assert risk_allergy["category"] == "severe_allergy"
+    assert "Severe Food Allergy" in risk_allergy["advisory"]
+
+    # 2. Young children
+    risk_child = advisor.detect_safety_risks("What toddler diet plan supports pediatric growth?")
+    assert risk_child["risk_level"] == "clinical"
+    assert risk_child["category"] == "infant_pediatric"
+    assert "Pediatric" in risk_child["advisory"]
+
+    # 3. Geriatric complex needs (dysphagia / swallowing difficulties)
+    risk_geriatric = advisor.detect_safety_risks("My elderly grandmother has severe dysphagia and swallowing difficulty, how to hydrate her?")
+    assert risk_geriatric["risk_level"] == "clinical"
+    assert risk_geriatric["category"] == "geriatric_complex"
+    assert "Geriatric" in risk_geriatric["advisory"]
+
+
+def test_general_health_advisor_ordinary_questions_not_flagged():
+    """
+    Ensure everyday wellness and nutrition questions are NOT false-positively flagged as emergencies.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+
+    ordinary_questions = [
+        "How much water should I drink after a 30 minute morning jog?",
+        "Is eating spinach good for natural iron intake?",
+        "What are simple, balanced breakfast ideas for a college student?",
+        "How do I read nutrition labels on packaged cereals to check for added sugars?",
+        "Are all cooking fats unhealthy, or how should I balance cooking oils?",
+        "What foods help prevent afternoon tiredness at a desk job?",
+    ]
+
+    for q in ordinary_questions:
+        risk = advisor.detect_safety_risks(q)
+        assert risk["risk_level"] == "none", f"Ordinary query incorrectly flagged: {q} -> {risk}"
+        assert risk["advisory"] is None
+
+
+
+
 

@@ -13,6 +13,8 @@ from agents import (
     PLANNER_SAFETY_DISCLAIMER,
     FoodIntakeAnalyzer,
     ANALYZER_SAFETY_DISCLAIMER,
+    GeneralHealthAdvisor,
+    ADVISOR_SAFETY_DISCLAIMER,
 )
 
 # Page configuration
@@ -54,6 +56,8 @@ def main():
         render_diet_planner(client)
     elif menu_selection == "3️⃣ Food Intake Analyzer":
         render_food_intake_analyzer(client)
+    elif menu_selection == "4️⃣ General Health Advisor":
+        render_general_health_advisor(client)
     elif menu_selection == "⚙️ Integration Status":
         render_status_page(client, config_status)
     else:
@@ -556,6 +560,106 @@ def render_food_intake_analyzer(client: WatsonxGraniteClient):
                         st.markdown(f"🔗 [Official Reference Document]({d.get('source_url')})")
 
         st.caption(res["disclaimer"])
+
+
+def render_general_health_advisor(client: WatsonxGraniteClient):
+    st.title("4️⃣ General Health & Nutrition Advisor")
+    st.caption("Everyday Wellness Coaching, Practical Habit Guidance & Clinical Safety Guardrails")
+
+    advisor = GeneralHealthAdvisor(client=client)
+
+    st.markdown(
+        """
+        Ask practical questions about **hydration, balanced daily routines, reading nutrition labels, 
+        student eating habits, food safety, and debunking common dietary myths**. 
+        All advice is grounded in **ICMR-NIN 2024** and **WHO** public health evidence.
+        """
+    )
+
+    # Visible non-medical safety banner
+    st.info(ADVISOR_SAFETY_DISCLAIMER)
+
+    # Example questions selector
+    selected_example = st.selectbox(
+        "💡 Select an example question (or write your own below):",
+        options=["-- Choose an example question or enter custom inquiry below --"] + advisor.EXAMPLE_QUESTIONS,
+        index=0,
+    )
+
+    default_q = ""
+    if selected_example != "-- Choose an example question or enter custom inquiry below --":
+        default_q = selected_example
+
+    with st.form("health_advisor_form"):
+        user_query = st.text_area(
+            "Your Health & Nutrition Question:",
+            value=default_q,
+            placeholder="e.g. How can I stay properly hydrated throughout the workday? Or: How do I read food labels in India to spot hidden sugars?",
+            help="Enter any general nutrition, wellness, or dietary habit question.",
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            age_group = st.selectbox(
+                "Age Group (Optional):",
+                options=advisor.AGE_GROUPS,
+                index=0,
+                help="Helps the advisor provide age-appropriate habit suggestions (e.g. adolescent growth vs older adult digestive comfort).",
+            )
+        with col2:
+            user_context = st.text_input(
+                "Daily Routine / Lifestyle Context (Optional):",
+                placeholder="e.g. Desk job with little movement, night-shift student, vegetarian runner...",
+                help="Optional lifestyle context without sharing sensitive personal health information.",
+            )
+
+        submit_advisor = st.form_submit_button("💡 Get General Wellness Advice", type="primary", use_container_width=True)
+
+    if submit_advisor:
+        if not user_query.strip():
+            st.warning("Please enter a question or choose an example from above.")
+        else:
+            with st.spinner("Analyzing inquiry & retrieving evidence for IBM Granite 4.0..."):
+                result = advisor.advise(
+                    query=user_query,
+                    age_group=age_group,
+                    user_context=user_context,
+                )
+
+            # Check for Urgent Emergency Warning
+            if result["risk_assessment"]["risk_level"] == "urgent":
+                st.error(result["answer"])
+            else:
+                # If clinical advisory exists, display prominent warning
+                if result.get("safety_advisory"):
+                    st.warning(result["safety_advisory"])
+
+                # Display Granite Answer
+                if result.get("answer"):
+                    st.subheader("🤖 Everyday Wellness Guidance (IBM Granite 4.0)")
+                    st.markdown(result["answer"])
+                    st.caption(f"Status: {result.get('status_message')}")
+                else:
+                    st.warning(f"Inference Notice: {result.get('status_message')}")
+
+                # Display Retrieved RAG Evidence
+                st.divider()
+                st.subheader("📚 Verified Public Health Guidelines (ICMR-NIN & WHO)")
+                if result.get("retrieved_docs") and len(result["retrieved_docs"]) > 0:
+                    for d in result["retrieved_docs"]:
+                        with st.container(border=True):
+                            st.markdown(f"**{d.get('title')}** — *{d.get('source_organization')} ({d.get('publication_year')})*")
+                            st.caption(f"Document: {d.get('document_name')}")
+                            st.write(d.get("content"))
+                            if d.get("source_url"):
+                                st.markdown(f"🔗 [Official Reference Document]({d.get('source_url')})")
+                else:
+                    st.info(
+                        "ℹ️ Note: No direct local guideline match was retrieved from the local dataset for this specific topic. "
+                        "The advice above is grounded strictly in foundational public health principles."
+                    )
+
+            st.caption(result["disclaimer"])
 
 
 def render_feature_placeholder(feature_name: str):
