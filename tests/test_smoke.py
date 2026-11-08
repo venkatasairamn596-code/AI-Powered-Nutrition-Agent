@@ -469,3 +469,388 @@ def test_diet_planner_failed_inference_handling():
     assert result_unconf["meal_plan"] is None
     assert "not configured" in result_unconf["status_message"]
 
+
+def test_food_composition_data_integrity():
+    """
+    Verify that food_composition.json exists, is valid JSON, and adheres to
+    ICMR-NIN IFCT 2017 / USDA FoodData Central authoritative schema.
+    """
+    import json
+    from pathlib import Path
+    data_file = Path(__file__).resolve().parent.parent / "data" / "food_composition.json"
+    assert data_file.exists(), "food_composition.json is missing"
+
+    with open(data_file, "r", encoding="utf-8") as f:
+        foods = json.load(f)
+
+    assert len(foods) >= 25, f"Expected at least 25 foods, found {len(foods)}"
+
+    required_keys = [
+        "id", "name", "category", "source", "default_serving_description",
+        "serving_weight_g", "calories_kcal", "protein_g", "carbohydrates_g",
+        "fat_g", "dietary_fiber_g", "sodium_mg"
+    ]
+
+    for item in foods:
+        for k in required_keys:
+            assert k in item, f"Missing key {k} in item {item.get('id')}"
+        assert any("ifct" in item["source"].lower() or "usda" in item["source"].lower() for item in [item]), (
+            f"Source must cite IFCT or USDA in {item.get('id')}"
+        )
+        assert item["calories_kcal"] >= 0
+        assert item["protein_g"] >= 0
+        assert item["carbohydrates_g"] >= 0
+        assert item["fat_g"] >= 0
+
+
+def test_food_intake_analyzer_matching():
+    """
+    Test food name, id, and alias resolution.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    # Exact ID match
+    f1 = analyzer.find_food("roti_whole_wheat")
+    assert f1 is not None
+    assert "Roti" in f1["name"]
+
+    # Alias match (chapati, phulka)
+    f2 = analyzer.find_food("chapati")
+    assert f2 is not None
+    assert f2["id"] == "roti_whole_wheat"
+
+    f3 = analyzer.find_food("moongphali")
+    assert f3 is not None
+    assert "peanuts" in f3["id"]
+
+    # Unknown food must return None (no guessing)
+    f_unknown = analyzer.find_food("super_space_gelatin_unobtainium")
+    assert f_unknown is None
+
+
+def test_food_intake_analyzer_deterministic_calculation():
+    """
+    Test mathematical accuracy of nutrient totals and portion scaling.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    log = [
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 2.0, "meal_type": "Lunch"},
+        {"food_name": "Cooked Toor / Arhar Dal (with tadka)", "portion": 1.0, "meal_type": "Lunch"},
+    ]
+
+    summary = analyzer.calculate_intake(log)
+
+    # Roti: 120 kcal * 2 = 240 kcal, Dal: 150 kcal * 1 = 150 kcal -> Total 390 kcal
+    assert summary["total_calories_kcal"] == 390.0
+    # Protein: 3.6 * 2 + 7.6 * 1 = 14.8g
+    assert summary["total_protein_g"] == 14.8
+    assert summary["matched_items_count"] == 2
+    assert summary["unmatched_items_count"] == 0
+    assert summary["macronutrient_ratios"]["protein_pct"] > 0
+    assert summary["macronutrient_ratios"]["carbs_pct"] > 0
+
+
+def test_food_intake_analyzer_unmatched_food_handling():
+    """
+    Test that unverified foods are marked as 'Nutrition data unavailable',
+    have None for nutrient fields rather than a misleading zero,
+    are excluded from totals, and flag partial daily estimates.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    log = [
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Unknown Mystery Dish", "portion": 1.0, "meal_type": "Lunch"},
+    ]
+
+    summary = analyzer.calculate_intake(log)
+
+    assert summary["total_items"] == 2
+    assert summary["matched_items_count"] == 1
+    assert summary["unmatched_items_count"] == 1
+    assert "Unknown Mystery Dish" in summary["unmatched_items"]
+    assert summary["is_partial_estimate"] is True
+    assert summary["has_no_verified_data"] is False
+    assert "PARTIAL ESTIMATE" in summary["disclaimer_label"]
+    assert "EXCLUDED" in summary["disclaimer_label"]
+
+    # Totals only reflect the matched roti (120 kcal, 3.6g protein)
+    assert summary["total_calories_kcal"] == 120.0
+    assert summary["total_protein_g"] == 3.6
+
+    unmatched_entry = next(i for i in summary["item_breakdowns"] if not i["matched"])
+    # Crucial safety requirement: Never treat unavailable nutritional data as an actual zero!
+    assert unmatched_entry["calories_kcal"] is None
+    assert unmatched_entry["protein_g"] is None
+    assert unmatched_entry["carbohydrates_g"] is None
+    assert unmatched_entry["fat_g"] is None
+    assert unmatched_entry["dietary_fiber_g"] is None
+    assert unmatched_entry["sodium_mg"] is None
+    assert "unavailable" in unmatched_entry["source"].lower()
+
+
+def test_food_intake_analyzer_all_unsupported_foods():
+    """
+    Test when all logged items lack verified nutritional data.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+    log = [
+        {"food_name": "Alien Food 1", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Alien Food 2", "portion": 2.0, "meal_type": "Dinner"},
+    ]
+    summary = analyzer.calculate_intake(log)
+
+    assert summary["matched_items_count"] == 0
+    assert summary["unmatched_items_count"] == 2
+    assert summary["has_no_verified_data"] is True
+    assert summary["is_partial_estimate"] is False
+    assert "NUTRITIONAL DATA UNAVAILABLE" in summary["disclaimer_label"]
+    assert summary["total_calories_kcal"] == 0.0
+    assert summary["total_protein_g"] == 0.0
+
+
+def test_food_intake_analyzer_partial_estimate_prompt():
+    """
+    Verify prompt explicitly instructs IBM Granite about partial estimates and excluded items.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+    log = [
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 2.0, "meal_type": "Lunch"},
+        {"food_name": "Unverified Street Snack", "portion": 1.0, "meal_type": "Evening Snack"},
+    ]
+    summary = analyzer.calculate_intake(log)
+    prompt = analyzer.build_prompt(summary, context="[ICMR-NIN Guidelines]")
+
+    assert "PARTIAL ESTIMATE" in prompt
+    assert "EXCLUDED from calculated totals" in prompt
+    assert "CRITICAL INSTRUCTION ON EXCLUDED FOODS" in prompt
+    assert "Unverified Street Snack" in prompt
+    assert "DO NOT invent, fabricate, or guess nutritional numbers" in prompt
+
+
+
+def test_food_intake_analyzer_empty_log_handling():
+    """
+    Verify empty food log is safely rejected before calling IBM Granite.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+    res = analyzer.analyze_intake([])
+
+    assert res["success"] is False
+    assert "empty" in res["status_message"].lower()
+    assert res["analysis_commentary"] is None
+
+
+def test_food_intake_analyzer_prompt_structure():
+    """
+    Verify FoodIntakeAnalyzer prompt includes deterministic numbers, RAG evidence, and constraints.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer, ANALYZER_SAFETY_DISCLAIMER
+
+    analyzer = FoodIntakeAnalyzer()
+    log = [
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+    ]
+    summary = analyzer.calculate_intake(log)
+    prompt = analyzer.build_prompt(summary, context="[ICMR-NIN Protein Benchmark: 0.83 g/kg]")
+
+    assert "CALCULATED FOOD INTAKE SUMMARY" in prompt
+    assert "Steamed Idli" in prompt
+    assert "130.0 kcal" in prompt or "130" in prompt
+    assert "ICMR-NIN" in prompt
+    assert "Disclaimer" in ANALYZER_SAFETY_DISCLAIMER
+
+
+def test_food_intake_analyzer_mock_watsonx_inference():
+    """
+    Verify full intake analysis pipeline with mock IBM Granite client.
+    """
+    from unittest.mock import MagicMock
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_response.return_value = (
+        "Dietary Review: Your intake of Idli and Sambar provides wholesome complex carbohydrates and legumes. "
+        "Strengths: Fermented foods support gut health. Areas for improvement: Add fresh fruit for dietary fiber."
+    )
+
+    analyzer = FoodIntakeAnalyzer(client=mock_client)
+    sample_log = [
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+        {"food_name": "Vegetable Sambar", "portion": 1.0, "meal_type": "Breakfast"},
+    ]
+
+    result = analyzer.analyze_intake(sample_log)
+
+    assert result["success"] is True
+    assert result["used_live_model"] is True
+    assert "Dietary Review" in result["analysis_commentary"]
+    assert len(result["retrieved_docs"]) > 0
+    assert result["intake_summary"]["total_calories_kcal"] > 0
+
+
+def test_food_intake_analyzer_entry_and_portion_validation():
+    """
+    Verify individual food log entry and portion size validation logic.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    # 1. Valid entry
+    is_valid, errors = analyzer.validate_entry("Whole Wheat Roti / Chapati", 2.0, "Lunch")
+    assert is_valid is True
+    assert len(errors) == 0
+
+    # 2. Empty food name
+    is_valid, errors = analyzer.validate_entry("", 1.0, "Lunch")
+    assert is_valid is False
+    assert any("empty" in e.lower() for e in errors)
+
+    # 3. Zero portion
+    is_valid, errors = analyzer.validate_entry("Steamed Idli", 0.0, "Breakfast")
+    assert is_valid is False
+    assert any("greater than 0" in e.lower() for e in errors)
+
+    # 4. Negative portion
+    is_valid, errors = analyzer.validate_entry("Steamed Idli", -1.5, "Breakfast")
+    assert is_valid is False
+    assert any("greater than 0" in e.lower() for e in errors)
+
+    # 5. Non-numeric portion
+    is_valid, errors = analyzer.validate_entry("Steamed Idli", "invalid_portion", "Breakfast")
+    assert is_valid is False
+    assert any("valid number" in e.lower() for e in errors)
+
+    # 6. Unrealistic portion (> 50 servings)
+    is_valid, errors = analyzer.validate_entry("Steamed Idli", 100.0, "Breakfast")
+    assert is_valid is False
+    assert any("limit" in e.lower() for e in errors)
+
+    # 7. Invalid meal type
+    is_valid, errors = analyzer.validate_entry("Steamed Idli", 2.0, "MidnightFeast")
+    assert is_valid is False
+    assert any("meal type" in e.lower() for e in errors)
+
+
+def test_food_intake_analyzer_multi_meal_daily_totals():
+    """
+    Verify complete multi-meal daily food log aggregation across Breakfast, Lunch, Snack, Dinner.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    full_day_log = [
+        # Breakfast
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+        {"food_name": "Vegetable Sambar", "portion": 1.0, "meal_type": "Breakfast"},
+        # Lunch
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 2.0, "meal_type": "Lunch"},
+        {"food_name": "Cooked Toor / Arhar Dal (with tadka)", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Curd / Plain Dahi (Whole Cow Milk)", "portion": 1.0, "meal_type": "Lunch"},
+        # Evening Snack
+        {"food_name": "Roasted Peanuts / Groundnuts", "portion": 1.0, "meal_type": "Evening Snack"},
+        {"food_name": "Indian Masala Chai (with Milk and 1 tsp Sugar)", "portion": 1.0, "meal_type": "Evening Snack"},
+        # Dinner
+        {"food_name": "Moong Dal Khichdi", "portion": 1.0, "meal_type": "Dinner"},
+        {"food_name": "Fresh Green Salad (Cucumber, Tomato, Carrot)", "portion": 1.0, "meal_type": "Dinner"},
+    ]
+
+    summary = analyzer.calculate_intake(full_day_log)
+
+    # Totals verification
+    assert summary["total_items"] == 9
+    assert summary["matched_items_count"] == 9
+    assert summary["unmatched_items_count"] == 0
+
+    # Calories: (65*2 + 95) + (120*2 + 150 + 92) + (172 + 78) + (220 + 24) = 225 + 482 + 250 + 244 = 1201.0
+    assert summary["total_calories_kcal"] == 1201.0
+
+    # Protein: (2.1*2 + 3.6) + (3.6*2 + 7.6 + 4.8) + (7.6 + 2.1) + (6.8 + 1.0) = 7.8 + 19.6 + 9.7 + 7.8 = 44.9
+    assert summary["total_protein_g"] == 44.9
+
+    # Fiber and sodium presence
+    assert summary["total_dietary_fiber_g"] > 0
+    assert summary["total_sodium_mg"] > 0
+
+    # Macronutrient ratios sum to ~100%
+    ratios = summary["macronutrient_ratios"]
+    macro_sum = ratios["carbs_pct"] + ratios["protein_pct"] + ratios["fat_pct"]
+    assert 99.0 <= macro_sum <= 101.0
+
+
+def test_food_intake_analyzer_failed_inference_handling():
+    """
+    Ensure watsonx connection errors do NOT fabricate fake nutrition data or crash pipeline,
+    and deterministic calculations remain intact.
+    """
+    from unittest.mock import MagicMock
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    # Test 1: Exception during IBM Granite call
+    mock_failing_client = MagicMock()
+    mock_failing_client.is_configured.return_value = True
+    mock_failing_client.generate_response.side_effect = RuntimeError("IBM watsonx network timeout")
+
+    analyzer = FoodIntakeAnalyzer(client=mock_failing_client)
+    sample_log = [
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 2.0, "meal_type": "Lunch"},
+        {"food_name": "Cooked Toor / Arhar Dal (with tadka)", "portion": 1.0, "meal_type": "Lunch"},
+    ]
+
+    result = analyzer.analyze_intake(sample_log)
+    assert result["success"] is False
+    assert result["analysis_commentary"] is None
+    assert "network timeout" in result["status_message"]
+    # Deterministic calculations must still be preserved accurately!
+    assert result["intake_summary"] is not None
+    assert result["intake_summary"]["total_calories_kcal"] == 390.0
+    assert result["intake_summary"]["total_protein_g"] == 14.8
+
+    # Test 2: Unconfigured client
+    unconfigured_client = WatsonxGraniteClient(api_key="", project_id="")
+    analyzer_unconf = FoodIntakeAnalyzer(client=unconfigured_client)
+    res_unconf = analyzer_unconf.analyze_intake(sample_log)
+    assert res_unconf["success"] is False
+    assert res_unconf["analysis_commentary"] is None
+    assert "not configured" in res_unconf["status_message"]
+    assert res_unconf["intake_summary"]["total_calories_kcal"] == 390.0
+
+
+def test_food_intake_analyzer_safety_disclaimers():
+    """
+    Verify non-clinical safety disclaimers, deficiency non-diagnosis,
+    and single-day limitation statements.
+    """
+    from agents.food_intake_analyzer import ANALYZER_SAFETY_DISCLAIMER, FoodIntakeAnalyzer
+
+    # Core disclaimer content checks
+    assert "Educational Disclaimer" in ANALYZER_SAFETY_DISCLAIMER
+    assert "medical nutrition therapy" in ANALYZER_SAFETY_DISCLAIMER
+    assert "deficiencies" in ANALYZER_SAFETY_DISCLAIMER
+    assert "long-term" in ANALYZER_SAFETY_DISCLAIMER
+    assert "dietitian" in ANALYZER_SAFETY_DISCLAIMER
+
+    # Calculation disclaimer label
+    analyzer = FoodIntakeAnalyzer()
+    summary = analyzer.calculate_intake([{"food_name": "Fresh Banana", "portion": 1.0, "meal_type": "Breakfast"}])
+    assert "estimate" in summary["disclaimer_label"].lower()
+    assert "IFCT 2017" in summary["disclaimer_label"]
+
+
+
