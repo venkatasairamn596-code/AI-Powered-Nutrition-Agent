@@ -93,6 +93,93 @@ def test_nutrition_assistant_prompt_structure():
     assert "CONTEXT FROM VERIFIED NUTRITION AUTHORITIES" in prompt
     assert "WHO Guidelines" in prompt
     assert "Disclaimer" in SAFETY_DISCLAIMER
+    assert "Prioritise ICMR-NIN evidence" in prompt
+    assert "United States guidance" in prompt
+
+
+def test_nutrition_assistant_response_completeness_and_truncation_handling():
+    """
+    Verify ensure_complete_response gracefully handles truncated model output
+    and guarantees the presence of the medical safety disclaimer.
+    """
+    from agents.nutrition_assistant import NutritionKnowledgeAssistant, SAFETY_DISCLAIMER
+
+    assistant = NutritionKnowledgeAssistant()
+
+    # Case 1: Truncated mid-sentence without terminal punctuation
+    truncated_ai_output = (
+        "1. Prioritize whole grains and millets like ragi and jowar for steady energy [Source: ICMR-NIN].\n"
+        "2. Include pulses, eggs, or dairy with every meal for protein adequacy [Source: ICMR-NIN].\n"
+        "3. Ensure proper daily fluid intake by drinking at least two liters of water, avoiding excessive"
+    )
+
+    cleaned = assistant.ensure_complete_response(truncated_ai_output)
+
+    # Must cleanly trim the unfinished 3rd point back to the last complete sentence
+    assert "avoiding excessive" not in cleaned
+    assert "protein adequacy [Source: ICMR-NIN]." in cleaned
+    # Must append the required safety disclaimer
+    assert "Medical Disclaimer" in cleaned
+    assert cleaned.endswith(SAFETY_DISCLAIMER)
+
+    # Case 2: Clean complete response that already has disclaimer
+    complete_output = (
+        "1. Eat whole grains [Source: ICMR-NIN].\n\n"
+        f"{SAFETY_DISCLAIMER}"
+    )
+    cleaned_complete = assistant.ensure_complete_response(complete_output)
+    assert cleaned_complete == complete_output
+
+
+def test_nutrition_assistant_token_budget():
+    """
+    Verify that answer_question provides a sufficient token budget (>= 350 max_new_tokens)
+    to prevent premature output cutoffs.
+    """
+    from unittest.mock import MagicMock
+    from agents.nutrition_assistant import NutritionKnowledgeAssistant
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_response.return_value = (
+        "1. Balanced diet advice [Source: ICMR-NIN].\n"
+        "2. Protein advice [Source: ICMR-NIN].\n"
+        "3. Hydration advice [Source: ICMR-NIN].\n\n"
+        "⚠️ Medical Disclaimer: Educational only."
+    )
+
+    assistant = NutritionKnowledgeAssistant(client=mock_client)
+    res = assistant.answer_question("What are three simple ways to maintain a balanced diet?")
+
+    assert res["success"] is True
+    # Verify generate_response was called with max_new_tokens >= 350
+    call_args = mock_client.generate_response.call_args
+    params = call_args.kwargs.get("params", {})
+    assert params.get("max_new_tokens", 0) >= 350
+    assert params.get("max_new_tokens") <= 450
+
+
+def test_rag_retriever_indian_context_prioritization():
+    """
+    Verify that Indian nutrition queries prioritize ICMR-NIN guidelines
+    and clearly label USDA entries as US comparative guidance.
+    """
+    from modules.rag_retriever import NutritionKnowledgeRetriever
+
+    retriever = NutritionKnowledgeRetriever()
+
+    # Query with explicit Indian context
+    results = retriever.search("balanced diet for student in India with dal and roti", top_k=3)
+    assert len(results) > 0
+    # Top result should be ICMR-NIN
+    top_org = results[0].get("source_organization", "")
+    assert "ICMR" in top_org or "NIN" in top_org
+
+    # Test context formatting includes explicit scope labels
+    context_str = retriever.format_context_for_prompt(retriever._guidelines)
+    assert "Regional Scope: Indian National Dietary Guidelines (ICMR-NIN)" in context_str
+    assert "Regional Scope: United States Dietary Guidelines (USDA / HHS) — US Comparative Guidance" in context_str
+
 
 
 def test_guidelines_metadata_integrity():
@@ -165,6 +252,54 @@ def test_usda_and_icmr_source_distinctions():
         assert "individual" in content or "population" in content, (
             f"Guideline {item['id']} must clearly distinguish population benchmarks from individual requirements"
         )
+
+
+def test_icmr_nin_2024_macronutrient_and_protein_accuracy():
+    """
+    Verify exact adherence to ICMR-NIN Dietary Guidelines for Indians 2024
+    and ICMR-NIN RDA 2020:
+    1. Cereals limited to a maximum of 45% of total daily energy (not 45-50%).
+    2. Pulses, eggs, and flesh foods together supply 14-15% of daily energy.
+    3. Whole grains/nutri-cereals constitute at least 50% of daily cereals.
+    4. Cereal-to-pulse ratio is approximately 3:1.
+    5. No unsupported claim of 'carbohydrate-induced metabolic dysfunction'.
+    6. Protein RDA is 0.83 g/kg/day with Reference Man (65 kg = 54g) and Reference Woman (55 kg = 46g).
+    """
+    import json
+    from pathlib import Path
+
+    data_file = Path(__file__).resolve().parent.parent / "data" / "nutrition_guidelines.json"
+    with open(data_file, "r", encoding="utf-8") as f:
+        guidelines = json.load(f)
+
+    macro_item = next(item for item in guidelines if item["id"] == "icmr-macronutrients")
+    protein_item = next(item for item in guidelines if item["id"] == "icmr-protein-requirements")
+
+    macro_text = macro_item["content"]
+    protein_text = protein_item["content"]
+
+    # 1. Cereals limited to 45% of energy
+    assert "maximum of 45%" in macro_text, "Cereals must be limited to maximum of 45% of total daily energy"
+    assert "45% to 50%" not in macro_text, "Outdated 45% to 50% cereal range should not be present"
+
+    # 2. Pulses, eggs and flesh foods together supply 14-15%
+    assert "Pulses, eggs, and flesh foods together" in macro_text, "14-15% recommendation must apply to pulses, eggs and flesh foods together"
+    assert "14% to 15%" in macro_text
+
+    # 3. Whole grains/nutri-cereals recommendation (at least 50% of cereals)
+    assert "at least 50%" in macro_text.lower() and "whole grains" in macro_text.lower()
+
+    # 4. No unsupported claim of carbohydrate-induced metabolic dysfunction
+    assert "carbohydrate-induced metabolic dysfunction" not in macro_text
+
+    # 5. Protein RDA 0.83 g/kg/day with reference adult numbers
+    assert "0.83 grams per kilogram" in protein_text
+    assert "65 kg" in protein_text and "54 grams" in protein_text
+    assert "55 kg" in protein_text and "46 grams" in protein_text
+
+    # 6. Cereal-pulse ratio approximately 3:1
+    assert "3:1" in protein_text
+
 
 
 def test_diet_planner_input_validation():
@@ -334,6 +469,448 @@ def test_diet_planner_post_generation_blocking():
     is_safe, detected = planner.check_post_generation_safety(safe_plan, "dairy, peanuts")
     assert is_safe is True
     assert len(detected) == 0
+
+
+def test_diet_planner_allergen_avoidance_vs_recommendation_safety():
+    """
+    Regression tests for Feature 2 Diet Planner allergen safety filtering:
+    1. Actual peanut recommendation: BLOCK.
+    2. Peanut chutney recommendation: BLOCK.
+    3. 'Avoid peanuts': Do not block solely because of this warning.
+    4. 'Peanuts are unsafe for this user': Do not block solely because of this warning.
+    5. Groundnut and moongphali recommendations: BLOCK.
+    6. Warning present but meal contains allergen: BLOCK.
+    7. Dairy and Gluten synonyms (paneer, curd, wheat, atta): BLOCK when recommended, SAFE when warning.
+    8. Ambiguous allergen statements: BLOCK.
+    """
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    planner = PersonalisedDietPlanner()
+
+    # 1. Actual peanut recommendation: BLOCK
+    actual_peanut_plan = (
+        "Breakfast: Poha garnished with roasted peanuts.\n"
+        "Lunch: Dal tadka and brown rice.\n"
+        "Dinner: Mixed vegetable curry with millets."
+    )
+    is_safe, detected = planner.check_post_generation_safety(actual_peanut_plan, "peanuts")
+    assert is_safe is False
+    assert any("peanut" in t for t in detected)
+
+    # 2. Peanut chutney recommendation: BLOCK
+    peanut_chutney_plan = (
+        "Breakfast: 2 Idlis with hot sambar and peanut chutney.\n"
+        "Lunch: Brown rice, yellow lentil dal, and cucumber salad.\n"
+        "Dinner: Ragi dosa with tomato chutney."
+    )
+    is_safe, detected = planner.check_post_generation_safety(peanut_chutney_plan, "peanuts")
+    assert is_safe is False
+    assert any("peanut" in t for t in detected)
+
+    # 3. 'Avoid peanuts': Do not block solely because of this warning
+    avoid_warning_plan = (
+        "Nutritional Reasoning: Avoid peanuts due to the declared food allergy.\n"
+        "Breakfast: Idli with sambar and coconut chutney.\n"
+        "Lunch: Brown rice, yellow lentil dal, and cucumber salad.\n"
+        "Evening Snack: Roasted chana.\n"
+        "Dinner: Ragi roti with mixed vegetable curry."
+    )
+    is_safe, detected = planner.check_post_generation_safety(avoid_warning_plan, "peanuts")
+    assert is_safe is True
+    assert len(detected) == 0
+
+    # 4. 'Peanuts are unsafe for this user': Do not block solely because of this warning
+    unsafe_warning_plan = (
+        "Safety Note: Peanuts are unsafe for this user and should not be consumed.\n"
+        "Breakfast: Sprouted moong chilla with mint chutney.\n"
+        "Lunch: Steamed rice, sambar, and poriyal.\n"
+        "Dinner: Phulka with bottle gourd sabzi and dal."
+    )
+    is_safe, detected = planner.check_post_generation_safety(unsafe_warning_plan, "peanuts")
+    assert is_safe is True
+    assert len(detected) == 0
+
+    # 5. Groundnut and moongphali recommendations: BLOCK
+    groundnut_plan = (
+        "Breakfast: Upma prepared in groundnut oil.\n"
+        "Lunch: Rice with rasam and beans palya.\n"
+        "Dinner: Jowar roti with dal."
+    )
+    is_safe_gn, detected_gn = planner.check_post_generation_safety(groundnut_plan, "peanuts")
+    assert is_safe_gn is False
+    assert "groundnut" in detected_gn
+
+    moongphali_plan = (
+        "Breakfast: Vegetable poha.\n"
+        "Lunch: Dal and rice.\n"
+        "Evening Snack: Moongphali chaat.\n"
+        "Dinner: Khichdi."
+    )
+    is_safe_mp, detected_mp = planner.check_post_generation_safety(moongphali_plan, "peanuts")
+    assert is_safe_mp is False
+    assert "moongphali" in detected_mp
+
+    # 'Do not use groundnut oil': ALLOW
+    negated_groundnut_plan = (
+        "Preparation instructions: Do not use groundnut oil.\n"
+        "Breakfast: Idli with sambar.\n"
+        "Lunch: Brown rice with dal.\n"
+        "Dinner: Ragi roti with sabzi."
+    )
+    is_safe_ngn, detected_ngn = planner.check_post_generation_safety(negated_groundnut_plan, "peanuts")
+    assert is_safe_ngn is True
+    assert len(detected_ngn) == 0
+
+    # Allergy headers and predicate avoidance: ALLOW
+    headers_plan = (
+        "Allergies: Peanuts\n"
+        "Safety Note: Peanuts: Prohibited.\n"
+        "Avoidance of peanuts is strictly required.\n"
+        "Breakfast: Idli with sambar.\n"
+        "Dinner: Ragi roti with curry."
+    )
+    is_safe_hdr, detected_hdr = planner.check_post_generation_safety(headers_plan, "peanuts")
+    assert is_safe_hdr is True
+    assert len(detected_hdr) == 0
+
+    # 6. Avoidance warning in text but meal contains allergen: MUST STILL BLOCK
+    conflicting_plan = (
+        "Nutritional Reasoning: Avoid peanuts as requested.\n"
+        "Breakfast: 2 Idlis with peanut chutney.\n"
+        "Lunch: Steamed rice and dal."
+    )
+    is_safe_conf, detected_conf = planner.check_post_generation_safety(conflicting_plan, "peanuts")
+    assert is_safe_conf is False
+    assert any("peanut" in t for t in detected_conf)
+
+    # 7. Dairy & Gluten synonyms:
+    # Recommended dairy -> BLOCK
+    dairy_recom_plan = "Lunch: Yellow dal, roti, and paneer bhurji."
+    assert planner.check_post_generation_safety(dairy_recom_plan, "dairy")[0] is False
+
+    # Dairy warning only -> SAFE
+    dairy_safe_plan = "Medical Disclaimer: Avoid dairy products.\nLunch: Yellow dal and roti."
+    assert planner.check_post_generation_safety(dairy_safe_plan, "dairy")[0] is True
+
+    # Recommended gluten (wheat/atta) -> BLOCK
+    gluten_recom_plan = "Dinner: Whole wheat atta roti with sabzi."
+    assert planner.check_post_generation_safety(gluten_recom_plan, "gluten")[0] is False
+
+    # Gluten warning only -> SAFE
+    gluten_safe_plan = "Note: Strictly avoid gluten and wheat.\nDinner: Brown rice with sabzi."
+    assert planner.check_post_generation_safety(gluten_safe_plan, "gluten")[0] is True
+
+    # 8. Ambiguous context (neither clear avoidance nor negative): BLOCK
+    ambiguous_plan = (
+        "Breakfast: Idli with sambar.\n"
+        "Note: Peanuts provide healthy fats and energy."
+    )
+    is_safe_amb, detected_amb = planner.check_post_generation_safety(ambiguous_plan, "peanuts")
+    assert is_safe_amb is False
+    assert any("peanut" in t for t in detected_amb)
+
+
+def test_diet_planner_token_budget():
+    """
+    Verify generate_plan allocates a 600-800 token budget (700 tokens)
+    for complete 4-meal plan generation.
+    """
+    from unittest.mock import MagicMock
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_response.return_value = (
+        "1. Breakfast: Idli with sambar.\n"
+        "2. Lunch: Brown rice with dal.\n"
+        "3. Evening Snack: Roasted chana.\n"
+        "4. Dinner: Ragi roti with sabzi.\n\n"
+        "Nutritional Reasoning: Follows ICMR-NIN guidelines.\n\n"
+        "Grounding Evidence: [Source: ICMR-NIN Guidelines 2024].\n\n"
+        "Medical Disclaimer: Educational only."
+    )
+
+    planner = PersonalisedDietPlanner(client=mock_client)
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Balanced Daily Nutrition",
+        "food_allergies": "None",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    result = planner.generate_plan(profile)
+
+    assert result["success"] is True
+    call_args = mock_client.generate_response.call_args
+    params = call_args.kwargs.get("params", {})
+    assert params.get("max_new_tokens", 0) >= 600
+    assert params.get("max_new_tokens") <= 800
+
+
+def test_diet_planner_completeness_and_truncation_detection():
+    """
+    Verify check_plan_completeness detects truncated plans, dangling punctuation,
+    and missing meals or sections.
+    """
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    # Truncated midway through dinner ending in 'Curd (Yogurt) ('
+    truncated_1 = (
+        "Breakfast: Idli with sambar and coconut chutney.\n"
+        "Lunch: Brown rice with yellow dal and cucumber salad.\n"
+        "Dinner: Ragi roti with Curd (Yogurt) ("
+    )
+    is_complete, missing = PersonalisedDietPlanner.check_plan_completeness(truncated_1)
+    assert is_complete is False
+    assert "Evening Snack" in missing
+    assert any("punctuation" in m.lower() or "dangling" in m.lower() for m in missing)
+
+    # Missing evening snack
+    incomplete_no_snack = (
+        "Breakfast: Idli with sambar.\n"
+        "Lunch: Rice with dal.\n"
+        "Dinner: Ragi roti with curry.\n"
+        "Nutritional Reasoning: ICMR-NIN aligned.\n"
+        "Grounding Evidence: [Source: ICMR-NIN].\n"
+        "Medical Disclaimer: Educational only."
+    )
+    is_complete_snack, missing_snack = PersonalisedDietPlanner.check_plan_completeness(incomplete_no_snack)
+    assert is_complete_snack is False
+    assert "Evening Snack" in missing_snack
+
+    # Complete plan with all 4 meals + reasoning + evidence + disclaimer
+    complete_plan = (
+        "Breakfast: 2 Idlis with vegetable sambar.\n"
+        "Lunch: Brown rice, yellow lentil dal, and beans poriyal.\n"
+        "Evening Snack: Roasted makhana and masala buttermilk.\n"
+        "Dinner: Ragi mudde or roti with mixed vegetable curry.\n\n"
+        "Nutritional Reasoning: Adheres strictly to ICMR-NIN macronutrient ratios with whole grains.\n\n"
+        "Grounding Evidence: [Source: ICMR-NIN Dietary Guidelines for Indians 2024].\n\n"
+        "Medical Disclaimer: This plan is for general educational wellness only."
+    )
+    is_complete_full, missing_full = PersonalisedDietPlanner.check_plan_completeness(complete_plan)
+    assert is_complete_full is True
+    assert len(missing_full) == 0
+
+
+def test_diet_planner_retry_on_incomplete_plan():
+    """
+    Verify generate_plan retries once if the initial output is truncated,
+    and succeeds if the second attempt produces a complete plan.
+    """
+    from unittest.mock import MagicMock
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+
+    truncated_first = (
+        "Breakfast: Idli with sambar.\n"
+        "Lunch: Rice with dal.\n"
+        "Dinner: Curd (Yogurt) ("
+    )
+    complete_second = (
+        "1. Breakfast: Idli with sambar.\n"
+        "2. Lunch: Brown rice with dal.\n"
+        "3. Evening Snack: Roasted chana.\n"
+        "4. Dinner: Ragi roti with sabzi.\n\n"
+        "Nutritional Reasoning: Follows ICMR-NIN guidelines.\n\n"
+        "Grounding Evidence: [Source: ICMR-NIN Guidelines 2024].\n\n"
+        "Medical Disclaimer: Educational only."
+    )
+    mock_client.generate_response.side_effect = [truncated_first, complete_second]
+
+    planner = PersonalisedDietPlanner(client=mock_client)
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Maintain a healthy balanced diet",
+        "food_allergies": "None",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    result = planner.generate_plan(profile)
+
+    assert result["success"] is True
+    assert result["meal_plan"] is not None
+    assert mock_client.generate_response.call_count == 2
+    assert "ragi roti" in result["meal_plan"].lower()
+
+
+def test_diet_planner_suppression_when_truncated_after_retry():
+    """
+    Verify that if a plan remains truncated after retry, it is NOT displayed
+    as a successful complete plan and returns a clear status message.
+    """
+    from unittest.mock import MagicMock
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+
+    truncated = (
+        "Breakfast: Idli with sambar.\n"
+        "Lunch: Rice with dal.\n"
+        "Dinner: Curd ("
+    )
+    mock_client.generate_response.side_effect = [truncated, truncated]
+
+    planner = PersonalisedDietPlanner(client=mock_client)
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Maintain a healthy balanced diet",
+        "food_allergies": "None",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    result = planner.generate_plan(profile)
+
+    assert result["success"] is False
+    assert result["meal_plan"] is None
+    assert "incomplete or cut off" in result["status_message"].lower()
+
+
+def test_diet_planner_prompt_unsupported_claims_guardrail():
+    """
+    Verify build_prompt instructs the model to avoid speculative claims
+    and unverified glycemic-index (GI) claims.
+    """
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    planner = PersonalisedDietPlanner()
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Balanced Daily Nutrition",
+        "food_allergies": "Peanuts",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    prompt = planner.build_prompt(profile, context="[Context]")
+
+    assert "glycemic-index" in prompt.lower()
+    assert "unsupported" in prompt.lower()
+    assert "four complete meals" in prompt.lower()
+
+
+def test_diet_planner_disclaimer_appended_after_validation():
+    """
+    Verify that if the LLM output omits the medical disclaimer in its tokens,
+    it does NOT trigger a completeness failure, and the trusted PLANNER_SAFETY_DISCLAIMER
+    is appended after validation.
+    """
+    from unittest.mock import MagicMock
+    from agents.diet_planner import PersonalisedDietPlanner, PLANNER_SAFETY_DISCLAIMER
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    # Output has all 4 meals and reasoning, but NO medical disclaimer
+    mock_client.generate_response.return_value = (
+        "Breakfast: Idli with sambar and coconut chutney.\n"
+        "Lunch: Brown rice, yellow lentil dal, and cucumber salad.\n"
+        "Evening Snack: Roasted chana and buttermilk.\n"
+        "Dinner: Ragi roti with mixed vegetable curry.\n\n"
+        "Nutritional Reasoning: Follows ICMR-NIN dietary guidelines for Indians."
+    )
+
+    planner = PersonalisedDietPlanner(client=mock_client)
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Maintain a healthy balanced diet",
+        "food_allergies": "None",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    result = planner.generate_plan(profile)
+
+    assert result["success"] is True
+    assert result["meal_plan"] is not None
+    # Must contain the trusted application-controlled disclaimer
+    assert "Medical Disclaimer" in result["meal_plan"]
+    assert PLANNER_SAFETY_DISCLAIMER in result["meal_plan"]
+
+
+def test_diet_planner_nutritional_reasoning_variations():
+    """
+    Verify check_plan_completeness accepts various valid nutritional reasoning headings
+    without false positives.
+    """
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    headings = [
+        "Nutritional Reasoning:",
+        "Nutritional Benefits:",
+        "Why these meals were chosen:",
+        "Dietary Rationale:",
+        "Nutritional Balance:",
+        "ICMR-NIN Alignment:",
+    ]
+    for h in headings:
+        plan = (
+            "Breakfast: Poha.\n"
+            "Lunch: Dal and rice.\n"
+            "Evening Snack: Makhana.\n"
+            "Dinner: Khichdi.\n\n"
+            f"{h}\n"
+            "Aligns with ICMR-NIN macronutrient distribution."
+        )
+        is_complete, missing = PersonalisedDietPlanner.check_plan_completeness(plan)
+        assert is_complete is True, f"Failed on heading: {h}, missing: {missing}"
+
+
+def test_diet_planner_diagnostics_and_focused_retry_prompt():
+    """
+    Verify build_retry_prompt creates a shorter, focused prompt and diagnostics are recorded.
+    """
+    from unittest.mock import MagicMock
+    from agents.diet_planner import PersonalisedDietPlanner
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+
+    truncated_first = "Breakfast: Idli.\nLunch: Dal.\nDinner: Curd ("
+    complete_second = (
+        "Breakfast: Idli with sambar.\n"
+        "Lunch: Rice with dal.\n"
+        "Evening Snack: Chana.\n"
+        "Dinner: Ragi roti with sabzi.\n\n"
+        "Nutritional Reasoning: Follows ICMR-NIN."
+    )
+    mock_client.generate_response.side_effect = [truncated_first, complete_second]
+
+    planner = PersonalisedDietPlanner(client=mock_client)
+    profile = {
+        "age": 20,
+        "dietary_preference": "Vegetarian",
+        "activity_level": "Moderate (active daily routine / 3-4 days exercise)",
+        "nutrition_goal": "Maintain a healthy balanced diet",
+        "food_allergies": "Peanuts",
+        "dietary_restrictions": "None",
+        "preferred_foods": "South Indian",
+    }
+    result = planner.generate_plan(profile)
+
+    assert result["success"] is True
+    # Diagnostics must be captured for both attempts
+    diag = result.get("diagnostics", {})
+    assert "attempt_1" in diag
+    assert "attempt_2" in diag
+    assert diag["responses_differ"] is True
+    assert diag["attempt_1"]["max_new_tokens"] == 700
+
+    # Verify build_retry_prompt is more concise than standard prompt
+    std_prompt = planner.build_prompt(profile, context="[Long context " * 20)
+    retry_prompt = planner.build_retry_prompt(profile, context="[Long context " * 20)
+    assert len(retry_prompt) < len(std_prompt)
+    assert "FORMAT REQUIREMENT" in retry_prompt
 
 
 def test_diet_planner_blocks_plan_in_pipeline():
@@ -853,6 +1430,184 @@ def test_food_intake_analyzer_safety_disclaimers():
     assert "IFCT 2017" in summary["disclaimer_label"]
 
 
+def test_food_intake_analyzer_portion_scaling_and_multipliers():
+    """
+    Verify strict mathematical accuracy of nutrient portion scaling and multipliers
+    across fractional, unity, and multi-serving quantities.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    # Base item: 1 roti = 120 kcal, 3.6g protein, 24.2g carbs, 1.2g fat, 3.1g fiber, 75.0mg sodium
+    # 0.5 portion test
+    log_half = [{"food_name": "Whole Wheat Roti / Chapati", "portion": 0.5, "meal_type": "Lunch"}]
+    res_half = analyzer.calculate_intake(log_half)
+    assert res_half["total_calories_kcal"] == 60.0
+    assert res_half["total_protein_g"] == 1.8
+    assert res_half["total_carbohydrates_g"] == 12.1
+    assert res_half["total_fat_g"] == 0.6
+    assert res_half["total_dietary_fiber_g"] == 1.6
+    assert res_half["total_sodium_mg"] == 37.5
+
+    # 2.5 portion test
+    log_2_5 = [{"food_name": "Whole Wheat Roti / Chapati", "portion": 2.5, "meal_type": "Lunch"}]
+    res_2_5 = analyzer.calculate_intake(log_2_5)
+    assert res_2_5["total_calories_kcal"] == 300.0
+    assert res_2_5["total_protein_g"] == 9.0
+    assert res_2_5["total_carbohydrates_g"] == 60.5
+    assert res_2_5["total_fat_g"] == 3.0
+    assert res_2_5["total_dietary_fiber_g"] == 7.8
+    assert res_2_5["total_sodium_mg"] == 187.5
+
+
+def test_food_intake_analyzer_unsupported_food_exclusion_and_missing_values():
+    """
+    Verify that unsupported foods are excluded from totals and assigned None for all nutrient fields,
+    never treated as zero-nutrient items or fabricated.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    mixed_log = [
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+        {"food_name": "Unverified Alien Dish", "portion": 1.0, "meal_type": "Breakfast"},
+        {"food_name": "Fantasy Protein Shake 9000", "portion": 3.0, "meal_type": "Lunch"},
+    ]
+
+    summary = analyzer.calculate_intake(mixed_log)
+
+    # 1 matched (Idli: 65*2 = 130 kcal, 2.1*2 = 4.2g protein), 2 unmatched
+    assert summary["matched_items_count"] == 1
+    assert summary["unmatched_items_count"] == 2
+    assert summary["is_partial_estimate"] is True
+    assert summary["unmatched_items"] == ["Unverified Alien Dish", "Fantasy Protein Shake 9000"]
+
+    # Totals strictly match Idli alone
+    assert summary["total_calories_kcal"] == 130.0
+    assert summary["total_protein_g"] == 4.2
+
+    # Check breakdown items for unmatched entries: all nutrients must be None
+    unmatched_entries = [i for i in summary["item_breakdowns"] if not i["matched"]]
+    assert len(unmatched_entries) == 2
+    for u in unmatched_entries:
+        assert u["calories_kcal"] is None
+        assert u["protein_g"] is None
+        assert u["carbohydrates_g"] is None
+        assert u["fat_g"] is None
+        assert u["dietary_fiber_g"] is None
+        assert u["sodium_mg"] is None
+        assert "unavailable" in u["source"].lower()
+
+
+def test_food_intake_analyzer_allergen_identification_and_safe_removal():
+    """
+    Verify allergen identification (peanuts, dairy, gluten, tree nuts) and that users
+    can safely identify and remove allergen items from a food log without data corruption.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer
+
+    analyzer = FoodIntakeAnalyzer()
+
+    # 1. Allergen detection checks
+    peanut_allergens = analyzer.identify_allergens("Roasted Peanuts / Groundnuts", ["moongphali"])
+    assert "Peanuts / Groundnuts" in peanut_allergens
+
+    dairy_allergens = analyzer.identify_allergens("Curd / Plain Dahi (Whole Cow Milk)", ["dahi"])
+    assert "Dairy / Milk" in dairy_allergens
+
+    gluten_allergens = analyzer.identify_allergens("Whole Wheat Roti / Chapati", ["chapati", "atta"])
+    assert "Gluten / Wheat" in gluten_allergens
+
+    nut_allergens = analyzer.identify_allergens("Raw Almonds / Badam", ["badam"])
+    assert "Tree Nuts" in nut_allergens
+
+    # 2. Balanced Sample Day allergen removal test
+    sample_day = [
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+        {"food_name": "Vegetable Sambar", "portion": 1.0, "meal_type": "Breakfast"},
+        {"food_name": "Whole Wheat Roti / Chapati", "portion": 2.0, "meal_type": "Lunch"},
+        {"food_name": "Cooked Toor / Arhar Dal (with tadka)", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Mixed Vegetable Sabzi", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Curd / Plain Dahi (Whole Cow Milk)", "portion": 1.0, "meal_type": "Lunch"},
+        {"food_name": "Roasted Peanuts / Groundnuts", "portion": 1.0, "meal_type": "Evening Snack"},
+        {"food_name": "Indian Masala Chai (with Milk and 1 tsp Sugar)", "portion": 1.0, "meal_type": "Evening Snack"},
+        {"food_name": "Moong Dal Khichdi", "portion": 1.0, "meal_type": "Dinner"},
+        {"food_name": "Fresh Green Salad (Cucumber, Tomato, Carrot)", "portion": 1.0, "meal_type": "Dinner"},
+    ]
+
+    initial_summary = analyzer.calculate_intake(sample_day)
+    assert initial_summary["total_calories_kcal"] == 1313.0
+    assert initial_summary["total_protein_g"] == 47.7
+    assert initial_summary["total_fat_g"] == 42.0
+
+    # User removes peanuts (item 6)
+    peanut_free_log = [item for item in sample_day if "peanut" not in item["food_name"].lower()]
+    assert len(peanut_free_log) == 9
+
+    updated_summary = analyzer.calculate_intake(peanut_free_log)
+    assert updated_summary["total_items"] == 9
+    assert updated_summary["matched_items_count"] == 9
+    # 1313.0 - 172.0 (peanuts) = 1141.0
+    assert updated_summary["total_calories_kcal"] == 1141.0
+    # 47.7 - 7.6 (peanuts) = 40.1
+    assert updated_summary["total_protein_g"] == 40.1
+    # 42.0 - 14.2 (peanuts) = 27.8
+    assert updated_summary["total_fat_g"] == 27.8
+
+
+def test_food_intake_analyzer_ensure_complete_response():
+    """
+    Verify ensure_complete_response cleans up mid-sentence truncation and guarantees disclaimer presence.
+    """
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer, ANALYZER_SAFETY_DISCLAIMER
+
+    # Truncated mid-sentence
+    truncated_text = (
+        "Your diet has great dietary fiber and healthy pulses. "
+        "However, sodium intake is relatively high at 1664mg, but"
+    )
+    cleaned = FoodIntakeAnalyzer.ensure_complete_response(truncated_text)
+    assert not cleaned.endswith(", but")
+    assert "Your diet has great dietary fiber and healthy pulses." in cleaned
+    assert ANALYZER_SAFETY_DISCLAIMER in cleaned
+
+    # Empty text
+    assert FoodIntakeAnalyzer.ensure_complete_response("") == ""
+
+
+def test_food_intake_analyzer_mock_metadata_inference():
+    """
+    Verify analyze_intake handles generate_with_metadata returning diagnostics.
+    """
+    from unittest.mock import MagicMock
+    from agents.food_intake_analyzer import FoodIntakeAnalyzer, ANALYZER_SAFETY_DISCLAIMER
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_with_metadata.return_value = {
+        "text": "The logged intake provides 1313 kcal with balanced pulses and vegetables. Good fiber intake.",
+        "stop_reason": "eos_token",
+        "generated_token_count": 85,
+        "input_token_count": 1200,
+        "params_used": {"max_new_tokens": 700},
+    }
+
+    analyzer = FoodIntakeAnalyzer(client=mock_client)
+    sample_log = [
+        {"food_name": "Steamed Idli", "portion": 2.0, "meal_type": "Breakfast"},
+    ]
+
+    res = analyzer.analyze_intake(sample_log)
+    assert res["success"] is True
+    assert res["used_live_model"] is True
+    assert "1313 kcal" in res["analysis_commentary"]
+    assert ANALYZER_SAFETY_DISCLAIMER in res["analysis_commentary"]
+    assert res["generation_metadata"]["stop_reason"] == "eos_token"
+    assert res["generation_metadata"]["generated_token_count"] == 85
+
+
 def test_general_health_advisor_normal_question_and_rag():
     """
     Test standard everyday nutrition question with RAG evidence and mock Granite response.
@@ -1075,6 +1830,234 @@ def test_general_health_advisor_ordinary_questions_not_flagged():
         risk = advisor.detect_safety_risks(q)
         assert risk["risk_level"] == "none", f"Ordinary query incorrectly flagged: {q} -> {risk}"
         assert risk["advisory"] is None
+
+
+def test_general_health_advisor_completeness_complete_response():
+    """
+    Verify check_response_completeness approves well-formed, fully punctuated numbered responses.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    complete_text = (
+        "1. Daily Fluid Goal: Drink 2.0 to 2.5 liters of fluids every day.\n"
+        "2. Healthy Fluids: Choose water, buttermilk, or tender coconut water.\n"
+        "3. Tea in Moderation: Unsweetened tea counts toward fluids, but avoid excess sugar.\n"
+        "4. Practical Tip: Carry a reusable bottle and monitor your hydration throughout the workday."
+    )
+    is_complete, defects = GeneralHealthAdvisor.check_response_completeness(complete_text, {"stop_reason": "eos_token"})
+    assert is_complete is True
+    assert len(defects) == 0
+
+
+def test_general_health_advisor_completeness_truncated_numbered_response():
+    """
+    Verify check_response_completeness flags responses truncated at numbered items (e.g. '5. **Set').
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    # Defect pattern reported in user request: '5. **Set'
+    truncated_text_1 = (
+        "1. Drink water after waking up.\n"
+        "2. Carry a reusable water bottle.\n"
+        "3. Incorporate traditional buttermilk.\n"
+        "4. Monitor your urine color.\n"
+        "5. **Set"
+    )
+    is_complete, defects = GeneralHealthAdvisor.check_response_completeness(truncated_text_1, {"stop_reason": "max_tokens"})
+    assert is_complete is False
+    assert any("incomplete" in d.lower() or "list item" in d.lower() or "bold" in d.lower() for d in defects)
+
+    # Cut off at '4. **Monitor Urine'
+    truncated_text_2 = (
+        "1. Start your day with water.\n"
+        "2. Carry a bottle.\n"
+        "3. Drink buttermilk.\n"
+        "4. **Monitor Urine"
+    )
+    is_complete_2, defects_2 = GeneralHealthAdvisor.check_response_completeness(truncated_text_2)
+    assert is_complete_2 is False
+    assert len(defects_2) > 0
+
+
+def test_general_health_advisor_completeness_incomplete_markdown_bullet():
+    """
+    Verify check_response_completeness detects unfinished bullets, dangling punctuation, and conjunctions.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    # Incomplete bullet
+    bullet_text = (
+        "- Drink plenty of fluids during warm weather.\n"
+        "- Avoid excessive caffeine intake.\n"
+        "- **Hydration"
+    )
+    is_comp_b, def_b = GeneralHealthAdvisor.check_response_completeness(bullet_text)
+    assert is_comp_b is False
+
+    # Dangling punctuation
+    dangling_punct = "Daily water requirement is 30 to 35 ml per kg of body weight ("
+    is_comp_p, def_p = GeneralHealthAdvisor.check_response_completeness(dangling_punct)
+    assert is_comp_p is False
+    assert any("punctuation" in d.lower() or "parenthesis" in d.lower() for d in def_p)
+
+    # Dangling conjunction
+    dangling_conj = "Staying well hydrated improves workplace productivity, and"
+    is_comp_c, def_c = GeneralHealthAdvisor.check_response_completeness(dangling_conj)
+    assert is_comp_c is False
+    assert any("conjunction" in d.lower() for d in def_c)
+
+
+def test_general_health_advisor_compact_retry_behaviour():
+    """
+    Verify that an initial truncated response triggers the compact retry prompt
+    and succeeds when the retry output is complete.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor, ADVISOR_SAFETY_DISCLAIMER
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+
+    # Attempt 1: Truncated output ending in '5. **Set'
+    truncated_output = {
+        "text": (
+            "1. Start your day with a glass of water.\n"
+            "2. Keep a water bottle at your desk.\n"
+            "3. Traditional drinks like buttermilk count toward hydration.\n"
+            "4. Plain tea without sugar is hydrating.\n"
+            "5. **Set"
+        ),
+        "stop_reason": "max_tokens",
+        "generated_token_count": 500,
+        "input_token_count": 800,
+    }
+
+    # Attempt 2 (Retry): Complete 3-point advice
+    complete_retry_output = {
+        "text": (
+            "1. Daily Target: Drink 2.0 to 2.5 liters of fluids daily as recommended by ICMR-NIN.\n"
+            "2. Healthy Fluid Sources: Clean water, unsweetened buttermilk, and lemon water are ideal choices.\n"
+            "3. Tea Guidelines: Plain unsweetened tea counts toward daily fluid intake in moderation."
+        ),
+        "stop_reason": "eos_token",
+        "generated_token_count": 95,
+        "input_token_count": 350,
+    }
+
+    mock_client.generate_with_metadata.side_effect = [truncated_output, complete_retry_output]
+
+    advisor = GeneralHealthAdvisor(client=mock_client)
+    res = advisor.advise(query="How much water should I realistically drink every day, and does tea count?")
+
+    assert res["success"] is True
+    assert res["used_live_model"] is True
+    assert res["diagnostics"]["retried"] is True
+    assert res["diagnostics"]["is_complete"] is True
+    assert "Daily Target: Drink 2.0 to 2.5 liters" in res["answer"]
+    assert ADVISOR_SAFETY_DISCLAIMER in res["answer"]
+    assert "focused retry" in res["status_message"]
+
+
+def test_general_health_advisor_suppresses_when_truncated_after_retry():
+    """
+    Verify that if generation remains incomplete even after retry, the response is
+    suppressed (answer is None, success is False) rather than showing broken text.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+
+    # Both attempts cut off mid-sentence
+    cut_off_meta = {
+        "text": "Drink at least 2 liters of water daily, especially when it is hot outside, because",
+        "stop_reason": "max_tokens",
+        "generated_token_count": 500,
+        "input_token_count": 700,
+    }
+    mock_client.generate_with_metadata.side_effect = [cut_off_meta, cut_off_meta]
+
+    advisor = GeneralHealthAdvisor(client=mock_client)
+    res = advisor.advise(query="Hydration advice for hot weather")
+
+    assert res["success"] is False
+    assert res["answer"] is None
+    assert "Generation Alert" in res["status_message"]
+    assert "suppressed" in res["status_message"]
+
+
+def test_general_health_advisor_emergency_query_bypass():
+    """
+    Verify that acute medical emergencies immediately bypass IBM Granite,
+    return safety escalation, and do not invoke LLM inference or RAG.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    mock_client = MagicMock()
+    advisor = GeneralHealthAdvisor(client=mock_client)
+
+    res = advisor.advise(query="I am having severe chest pain and difficulty breathing, what should I eat?")
+
+    assert res["success"] is True
+    assert res["used_live_model"] is False
+    assert res["risk_assessment"]["risk_level"] == "urgent"
+    assert "Emergency Medical Warning" in res["answer"]
+    assert len(res["retrieved_docs"]) == 0
+    # Crucial safety check: model was never called
+    mock_client.generate_response.assert_not_called()
+    mock_client.generate_with_metadata.assert_not_called()
+
+
+def test_general_health_advisor_relevant_hydration_evidence_selection():
+    """
+    Verify that hydration inquiries retrieve ONLY hydration guidelines,
+    avoiding unrelated protein RDA, free sugars, or sodium salt documents.
+    """
+    from agents.general_health_advisor import GeneralHealthAdvisor
+
+    advisor = GeneralHealthAdvisor()
+    docs = advisor.retrieve_evidence("How much water should I realistically drink every day, and does tea count?")
+
+    assert len(docs) == 1
+    assert docs[0]["id"] == "icmr-hydration-water"
+    assert "ICMR" in docs[0]["source_organization"] and "NIN" in docs[0]["source_organization"]
+
+    # Verify unrelated guidelines are completely excluded
+    retrieved_ids = [d["id"] for d in docs]
+    assert "who-free-sugars" not in retrieved_ids
+    assert "icmr-protein-requirements" not in retrieved_ids
+    assert "who-sodium-salt" not in retrieved_ids
+
+
+def test_general_health_advisor_disclaimer_appended_after_validation():
+    """
+    Verify that the trusted educational safety disclaimer is appended
+    after response completeness validation.
+    """
+    from unittest.mock import MagicMock
+    from agents.general_health_advisor import GeneralHealthAdvisor, ADVISOR_SAFETY_DISCLAIMER
+
+    mock_client = MagicMock()
+    mock_client.is_configured.return_value = True
+    mock_client.generate_with_metadata.return_value = {
+        "text": (
+            "1. Establish regular meal timings.\n"
+            "2. Incorporate fresh fruits and vegetables daily.\n"
+            "3. Maintain adequate daily hydration."
+        ),
+        "stop_reason": "eos_token",
+        "generated_token_count": 50,
+        "input_token_count": 300,
+    }
+
+    advisor = GeneralHealthAdvisor(client=mock_client)
+    res = advisor.advise(query="How to build healthy eating routines?")
+
+    assert res["success"] is True
+    assert res["answer"].endswith(ADVISOR_SAFETY_DISCLAIMER)
+    assert "Educational Disclaimer" in res["answer"]
 
 
 

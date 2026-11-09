@@ -172,16 +172,20 @@ class WatsonxGraniteClient:
                 "Install it using 'pip install ibm-watsonx-ai'."
             ) from e
 
-    def generate_response(self, prompt: str, params: Optional[Dict[str, Any]] = None) -> str:
+    def generate_with_metadata(
+        self, prompt: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Generate response from IBM Granite foundation model.
-        NOTE: No fake AI responses are used. If credentials or dependencies are missing,
-        an explicit exception is raised.
+        Generate response from IBM Granite and capture diagnostic metadata:
+        - text: generated text string
+        - stop_reason: finish reason (e.g. 'eos_token', 'max_tokens', 'stop_sequence')
+        - generated_token_count: number of generated tokens
+        - input_token_count: number of input tokens
+        - params_used: actual parameters passed
         """
         if self._model is None:
             self.initialize_model()
 
-        # Default bounded parameters to prevent unexpected token consumption
         default_params = {
             "decoding_method": "greedy",
             "max_new_tokens": 250,
@@ -191,6 +195,43 @@ class WatsonxGraniteClient:
         if params:
             default_params.update(params)
 
-        # Real inference call against IBM Granite
-        result = self._model.generate_text(prompt=prompt, params=default_params)
-        return result
+        try:
+            raw_meta = self._model.generate_text(prompt=prompt, params=default_params, raw_response=True)
+            if isinstance(raw_meta, dict):
+                results = raw_meta.get("results", [{}])
+                first_res = results[0] if results else {}
+                text = first_res.get("generated_text", "")
+                stop_reason = first_res.get("stop_reason", "unknown")
+                gen_tokens = first_res.get("generated_token_count", len(text.split()))
+                input_tokens = first_res.get("input_token_count", 0)
+            else:
+                text = str(raw_meta)
+                stop_reason = "unknown"
+                gen_tokens = len(text.split())
+                input_tokens = 0
+
+            return {
+                "text": text,
+                "stop_reason": stop_reason,
+                "generated_token_count": gen_tokens,
+                "input_token_count": input_tokens,
+                "params_used": default_params,
+            }
+        except Exception:
+            text = self._model.generate_text(prompt=prompt, params=default_params)
+            return {
+                "text": text,
+                "stop_reason": "unknown",
+                "generated_token_count": len(text.split()),
+                "input_token_count": 0,
+                "params_used": default_params,
+            }
+
+    def generate_response(self, prompt: str, params: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Generate response from IBM Granite foundation model.
+        NOTE: No fake AI responses are used. If credentials or dependencies are missing,
+        an explicit exception is raised.
+        """
+        meta = self.generate_with_metadata(prompt=prompt, params=params)
+        return meta["text"]

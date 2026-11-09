@@ -233,14 +233,130 @@ Question: {query}
 TASK & CONSTRAINTS:
 1. Provide a clear, educational, and empathetic answer explaining everyday wellness implications.
 2. Ground your advice in the retrieved guidelines whenever relevant; if direct evidence is unavailable, state this transparently.
-3. Offer practical, culturally authentic food and routine choices (e.g., traditional Indian foods, balanced meal combinations, hydration tips).
-4. Strictly avoid diagnosing illnesses, prescribing supplements or medications, or claiming that the user has a deficiency.
-5. If the question touches on clinical conditions, advise consulting a qualified physician or registered dietitian.
-6. Do NOT invent citations, statistics, or guideline recommendations.
-7. Conclude with a clear educational safety disclaimer.
+3. Offer practical, culturally authentic food and routine choices (e.g., traditional Indian drinks/foods, balanced meal combinations, hydration tips).
+4. Provide advice in 3 to 4 structured, fully finished points with complete, well-formed sentences. Keep each point direct (2-3 sentences max) so all recommendations finish cleanly without truncation.
+5. Strictly avoid diagnosing illnesses, prescribing supplements or medications, or claiming that the user has a deficiency.
+6. If the question touches on clinical conditions, advise consulting a qualified physician or registered dietitian.
+7. Do NOT invent citations, statistics, or guideline recommendations.
 
 EDUCATIONAL ADVICE:"""
         return prompt
+
+    def build_compact_retry_prompt(
+        self,
+        query: str,
+        age_group: str,
+        user_context: str,
+        evidence_context: str,
+        safety_notice: Optional[str] = None,
+    ) -> str:
+        """
+        Builds a compact, focused retry prompt when initial generation was truncated.
+        Constrains output to concise, fully finished numbered points to guarantee completion.
+        """
+        age_str = f"Age Group: {age_group}" if age_group and age_group != "Prefer not to say" else "Age Group: General Adult"
+        context_str = f"Context: {user_context}" if user_context.strip() else "Context: Standard daily routine"
+        safety_line = f"SAFETY ADVISORY: {safety_notice}\n" if safety_notice else ""
+
+        retry_prompt = f"""You are the General Health & Nutrition Advisor. Provide concise, complete everyday wellness advice grounded in ICMR-NIN/WHO guidelines.
+
+VERIFIED GUIDELINES:
+{evidence_context}
+
+USER QUESTION: {query}
+{age_str} | {context_str}
+{safety_line}
+STRICT FORMAT REQUIREMENT:
+1. Provide exactly 3 or 4 concise, practical recommendations.
+2. Every numbered point MUST be a complete, fully finished sentence with terminal punctuation.
+3. Keep the entire response under 250 words so all points finish cleanly without truncation.
+4. Do NOT start any point or heading that you cannot finish completely.
+5. Do NOT diagnose illnesses, prescribe medications, or invent citations.
+
+CONCISE WELLNESS ADVICE:"""
+        return retry_prompt
+
+    def _call_client(self, prompt: str, params: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """
+        Safely invokes the Watsonx client, capturing diagnostic metadata with backward compatibility.
+        """
+        if hasattr(self.client, "generate_with_metadata"):
+            try:
+                meta = self.client.generate_with_metadata(prompt=prompt, params=params)
+                if isinstance(meta, dict) and isinstance(meta.get("text"), str):
+                    return meta["text"], meta
+            except Exception:
+                pass
+        raw = self.client.generate_response(prompt=prompt, params=params)
+        return raw, {"token_usage": {}, "stop_reason": "unknown", "response_length": len(raw), "generated_token_count": len(raw.split())}
+
+    @staticmethod
+    def check_response_completeness(text: str, metadata: Optional[Dict[str, Any]] = None) -> Tuple[bool, List[str]]:
+        """
+        Detects whether an AI response is complete or cut off mid-generation:
+        - Detects unfinished numbered list items (e.g. '5. **Set', '4. **Monitor Urine').
+        - Detects unfinished markdown headings (e.g. '### ', '## Tips for').
+        - Detects unclosed markdown formatting (bolding / italics).
+        - Detects dangling punctuation (, : - ( [ / \\).
+        - Detects dangling trailing conjunctions/prepositions.
+        - Detects abrupt lack of terminal sentence punctuation.
+        - Checks model stop_reason metadata (max_tokens).
+        """
+        if not text or not str(text).strip():
+            return False, ["Response is empty"]
+
+        cleaned = str(text).strip()
+        defects = []
+
+        # 1. Check unfinished markdown headings at tail (e.g. text ends with '#', '## ', '### Heading')
+        if re.search(r"(?:^|\n)\s*#{1,6}\s*[^.\n]*$", cleaned):
+            defects.append("Unfinished markdown heading at end of response")
+
+        # 2. Check unfinished numbered lists, bullets, or bold tags
+        # e.g. '5. **Set', '4. **Monitor Urine', '5. **', '- **Tip'
+        lines = cleaned.split("\n")
+        last_non_empty = ""
+        for line in reversed(lines):
+            if line.strip():
+                last_non_empty = line.strip()
+                break
+
+        if re.search(r"^(?:\d+[\.\)]|[-*•])\s*(?:\*\*[^*]*\*?|[A-Za-z0-9\s]{1,30})$", last_non_empty):
+            if not last_non_empty.endswith((".", "!", "?", '"', '”', ")")):
+                defects.append(f"Incomplete trailing list item or bullet: '{last_non_empty[:35]}'")
+
+        # 3. Check unclosed bolding: e.g. text has an odd number of '**'
+        if cleaned.count("**") % 2 != 0:
+            defects.append("Unclosed markdown bold formatting (**)")
+
+        # 4. Check dangling punctuation / unclosed brackets
+        cleaned_tail = cleaned.rstrip(" *_\t\r\n")
+        if cleaned_tail and cleaned_tail[-1] in "(,:-[{/\\–—":
+            defects.append(f"Dangling terminal punctuation ('{cleaned_tail[-1]}')")
+        elif cleaned.count("(") > cleaned.count(")") or cleaned.count("[") > cleaned.count("]"):
+            defects.append("Unclosed parenthesis or bracket")
+
+        # 5. Check dangling trailing conjunctions or prepositions
+        dangling_conj_pattern = (
+            r"\b(?:"
+            r"and|or|with|of|the|to|in|for|such\s+as|including|plus|but|that|"
+            r"because|as|if|so|while|when|where|by|from|about"
+            r")\s*[*_]*$"
+        )
+        if re.search(dangling_conj_pattern, cleaned, re.IGNORECASE):
+            defects.append("Dangling trailing conjunction or preposition")
+
+        # 6. Check terminal sentence punctuation: response must end in valid sentence-ending punctuation
+        terminal_puncts = {".", "!", "?", '"', '”', ")", "]", "*"}
+        if cleaned and cleaned[-1] not in terminal_puncts:
+            defects.append("Response ends abruptly without terminal sentence punctuation")
+
+        # 7. Check if stop_reason is max_tokens and defects exist
+        if metadata and metadata.get("stop_reason") == "max_tokens" and defects:
+            defects.insert(0, "Model token limit reached (stop_reason: max_tokens)")
+
+        is_complete = len(defects) == 0
+        return is_complete, defects
 
     def advise(
         self,
@@ -251,10 +367,11 @@ EDUCATIONAL ADVICE:"""
         """
         Full orchestration pipeline for Feature 4:
         1. Validates user inquiry.
-        2. Scans for acute or clinical safety risks.
-        3. Retrieves evidence via RAG.
+        2. Scans for acute or clinical safety risks (emergency bypass).
+        3. Retrieves evidence via RAG (prioritizing relevant guideline topics).
         4. Constructs grounded IBM Granite prompt.
-        5. Generates AI response or returns immediate safety guidance.
+        5. Executes inference with token management, completeness checks, and compact retry.
+        6. Appends trusted educational safety disclaimer after validation.
         """
         clean_query = str(query).strip() if query else ""
         if not clean_query:
@@ -271,7 +388,7 @@ EDUCATIONAL ADVICE:"""
 
         risk_assessment = self.detect_safety_risks(clean_query, user_context)
 
-        # Immediate escalation for emergency medical symptoms
+        # Immediate escalation for emergency medical symptoms (bypasses Granite entirely)
         if risk_assessment["risk_level"] == "urgent":
             return {
                 "success": True,
@@ -310,6 +427,7 @@ EDUCATIONAL ADVICE:"""
             "retrieved_docs": retrieved_docs,
             "risk_assessment": risk_assessment,
             "safety_advisory": safety_advisory,
+            "diagnostics": {},
             "status_message": "",
             "disclaimer": ADVISOR_SAFETY_DISCLAIMER,
             "used_live_model": False,
@@ -317,22 +435,96 @@ EDUCATIONAL ADVICE:"""
 
         if self.client.is_configured():
             try:
-                params = {
-                    "max_new_tokens": 500,
+                # Attempt 1: Standard structured generation (650 token budget)
+                params_1 = {
+                    "max_new_tokens": 650,
                     "min_new_tokens": 20,
                     "temperature": 0.25,
                 }
-                raw_response = self.client.generate_response(prompt=prompt, params=params)
+                raw_response, meta_1 = self._call_client(prompt=prompt, params=params_1)
+                is_complete_1, defects_1 = self.check_response_completeness(raw_response, meta_1)
+
                 answer_text = raw_response.strip()
+                used_retry = False
+                attempt_2_meta = {}
+                is_complete = is_complete_1
+                missing_elements = defects_1
 
-                # If clinical or prescription notice exists, prepend a clear advisory box
-                if safety_advisory:
-                    answer_text = f"> **Clinical Advisory**: {safety_advisory}\n\n" + answer_text
+                # If Attempt 1 was truncated, execute compact retry with focused prompt
+                if not is_complete_1:
+                    used_retry = True
+                    compact_prompt = self.build_compact_retry_prompt(
+                        query=clean_query,
+                        age_group=age_group,
+                        user_context=user_context,
+                        evidence_context=formatted_context if has_evidence else "[General public health guidelines]",
+                        safety_notice=safety_advisory,
+                    )
+                    params_2 = {
+                        "max_new_tokens": 450,
+                        "min_new_tokens": 20,
+                        "temperature": 0.2,
+                    }
+                    retry_response, meta_2 = self._call_client(prompt=compact_prompt, params=params_2)
+                    is_complete_2, defects_2 = self.check_response_completeness(retry_response, meta_2)
+                    attempt_2_meta = meta_2
 
-                result["answer"] = answer_text
-                result["success"] = True
-                result["used_live_model"] = True
-                result["status_message"] = "General health and nutrition advice generated with IBM Granite 4.0."
+                    if is_complete_2:
+                        answer_text = retry_response.strip()
+                        is_complete = True
+                        missing_elements = []
+                    else:
+                        is_complete = False
+                        missing_elements = defects_2
+
+                # Diagnostics tracking
+                result["diagnostics"] = {
+                    "attempt_1": {
+                        "stop_reason": meta_1.get("stop_reason", "unknown"),
+                        "generated_tokens": meta_1.get("generated_token_count", len(raw_response.split())),
+                        "input_tokens": meta_1.get("input_token_count", 0),
+                        "is_complete": is_complete_1,
+                        "defects": defects_1,
+                    },
+                    "retried": used_retry,
+                    "is_complete": is_complete,
+                }
+                if used_retry:
+                    result["diagnostics"]["attempt_2"] = {
+                        "stop_reason": attempt_2_meta.get("stop_reason", "unknown"),
+                        "generated_tokens": attempt_2_meta.get("generated_token_count", 0),
+                        "input_tokens": attempt_2_meta.get("input_token_count", 0),
+                        "is_complete": is_complete,
+                        "defects": missing_elements,
+                    }
+                    result["diagnostics"]["responses_differ"] = (raw_response != answer_text)
+
+                if is_complete:
+                    validated_answer = answer_text
+                    if safety_advisory:
+                        validated_answer = f"> **Clinical Advisory**: {safety_advisory}\n\n" + validated_answer
+
+                    # Append application-controlled educational disclaimer after validation
+                    validated_answer += f"\n\n{ADVISOR_SAFETY_DISCLAIMER}"
+
+                    result["answer"] = validated_answer
+                    result["success"] = True
+                    result["used_live_model"] = True
+                    result["status_message"] = (
+                        "General health and nutrition advice generated with IBM Granite 4.0."
+                        if not used_retry
+                        else "General health and nutrition advice completed successfully via focused retry."
+                    )
+                else:
+                    # Truncated even after retry - do NOT display incomplete output as successful
+                    result["answer"] = None
+                    result["success"] = False
+                    result["used_live_model"] = True
+                    defect_str = ", ".join(missing_elements) if missing_elements else "Truncated output"
+                    result["status_message"] = (
+                        f"Generation Alert: The model response was cut off before completion ({defect_str}). "
+                        "For educational integrity and safety, incomplete guidance is suppressed. Please try submitting again."
+                    )
             except Exception as e:
                 result["answer"] = None
                 result["status_message"] = f"IBM watsonx inference notice: {str(e)}"

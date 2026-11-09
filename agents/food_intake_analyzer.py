@@ -30,6 +30,25 @@ ANALYZER_SAFETY_DISCLAIMER = (
     "Always consult a registered clinical dietitian or physician for personal medical or therapeutic guidance."
 )
 
+COMMON_ALLERGENS = {
+    "peanuts": {
+        "display": "Peanuts / Groundnuts",
+        "keywords": ["peanut", "peanuts", "groundnut", "groundnuts", "moongphali", "mungfali", "singdana"],
+    },
+    "dairy": {
+        "display": "Dairy / Milk",
+        "keywords": ["dairy", "milk", "paneer", "curd", "dahi", "cheese", "ghee", "butter", "whey", "yogurt", "chai"],
+    },
+    "gluten": {
+        "display": "Gluten / Wheat",
+        "keywords": ["gluten", "wheat", "atta", "maida", "sooji", "suji", "semolina", "roti", "chapati", "paratha", "bread"],
+    },
+    "nuts": {
+        "display": "Tree Nuts",
+        "keywords": ["almond", "almonds", "badam", "cashew", "walnut", "pista", "pistachio"],
+    },
+}
+
 
 class FoodIntakeAnalyzer:
     """
@@ -68,6 +87,52 @@ class FoodIntakeAnalyzer:
             errors.append(f"Meal type must be one of: {', '.join(self.VALID_MEAL_TYPES)}.")
 
         return len(errors) == 0, errors
+
+    @staticmethod
+    def identify_allergens(food_name: str, aliases: Optional[List[str]] = None) -> List[str]:
+        """
+        Identifies common potential allergen categories (peanuts, dairy, gluten, tree nuts)
+        present in a food name or its known aliases.
+        """
+        tokens = [str(food_name).lower()]
+        if aliases:
+            tokens.extend([str(a).lower() for a in aliases])
+        combined = " ".join(tokens)
+
+        detected = []
+        for allergen_key, allergen_info in COMMON_ALLERGENS.items():
+            for kw in allergen_info["keywords"]:
+                pattern = rf"(?:\b|_){re.escape(kw)}(?:\b|_)"
+                if re.search(pattern, combined):
+                    if allergen_info["display"] not in detected:
+                        detected.append(allergen_info["display"])
+                    break
+        return detected
+
+    @staticmethod
+    def ensure_complete_response(text: str) -> str:
+        """
+        Post-processes model output to ensure response completeness:
+        - If generation is truncated mid-sentence, trims back to the last complete sentence.
+        - Guarantees that the educational safety disclaimer is appended if missing.
+        """
+        if not text or not text.strip():
+            return ""
+
+        cleaned = text.strip()
+
+        # If text ends abruptly without terminal punctuation, trim back to the last complete sentence
+        terminal_puncts = {".", "!", "?", '"', '”', ")", "*"}
+        if cleaned[-1] not in terminal_puncts:
+            last_punct = max(cleaned.rfind("."), cleaned.rfind("!"), cleaned.rfind("?"))
+            if last_punct > 0:
+                cleaned = cleaned[:last_punct + 1].strip()
+
+        # Ensure educational safety disclaimer is present
+        if "disclaimer" not in cleaned.lower():
+            cleaned += f"\n\n{ANALYZER_SAFETY_DISCLAIMER}"
+
+        return cleaned
 
     def __init__(
         self,
@@ -180,6 +245,7 @@ class FoodIntakeAnalyzer:
                 fat = round(float(matched_food.get("fat_g", 0.0)) * portion, 1)
                 fiber = round(float(matched_food.get("dietary_fiber_g", 0.0)) * portion, 1)
                 sodium = round(float(matched_food.get("sodium_mg", 0.0)) * portion, 1)
+                item_allergens = self.identify_allergens(matched_food["name"], matched_food.get("aliases", []))
 
                 total_calories += cals
                 total_protein += protein
@@ -197,6 +263,7 @@ class FoodIntakeAnalyzer:
                     "source": matched_food.get("source", "IFCT 2017"),
                     "source_code": matched_food.get("source_code", matched_food.get("source", "IFCT 2017")),
                     "matched": True,
+                    "allergens": item_allergens,
                     "calories_kcal": cals,
                     "protein_g": protein,
                     "carbohydrates_g": carbs,
@@ -206,6 +273,7 @@ class FoodIntakeAnalyzer:
                 })
             else:
                 unmatched_items.append(food_name)
+                unmatched_allergens = self.identify_allergens(food_name)
                 item_breakdowns.append({
                     "food_name": food_name,
                     "logged_name": food_name,
@@ -215,6 +283,7 @@ class FoodIntakeAnalyzer:
                     "source": "None - Nutrition data unavailable in verified dataset",
                     "source_code": "Unmatched in IFCT 2017 / USDA",
                     "matched": False,
+                    "allergens": unmatched_allergens,
                     "calories_kcal": None,
                     "protein_g": None,
                     "carbohydrates_g": None,
@@ -364,11 +433,26 @@ TASK & CONSTRAINTS:
 4. Identify potential nutritional gaps or areas of improvement compared against general ICMR-NIN benchmarks (e.g., protein sufficiency against ~0.83 g/kg, sodium moderation <2000mg, fiber adequacy).
 5. Suggest practical, balanced whole-food choices to complement the logged meals.
 6. Emphasize that a single day's food intake does not indicate chronic deficiency or long-term nutritional status.
-7. Do NOT invent or alter the numerical values above.
-8. Conclude with a clear educational safety disclaimer.
+7. Do NOT invent, fabricate, or alter the numerical values above.
+8. Structure each section concisely (2-3 direct sentences or bullet points) so that all observations and the safety disclaimer fit completely without truncation.
+9. Conclude with a clear educational safety disclaimer.
 
 NUTRITIONAL ANALYSIS:"""
         return prompt
+
+    def _call_client(self, prompt: str, params: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """
+        Safely invokes the Watsonx client, supporting both generate_with_metadata and legacy generate_response.
+        """
+        if hasattr(self.client, "generate_with_metadata"):
+            try:
+                meta = self.client.generate_with_metadata(prompt=prompt, params=params)
+                if isinstance(meta, dict) and isinstance(meta.get("text"), str):
+                    return meta["text"], meta
+            except Exception:
+                pass
+        raw = self.client.generate_response(prompt=prompt, params=params)
+        return raw, {"token_usage": {}, "finish_reason": "unknown", "response_length": len(raw)}
 
     def analyze_intake(self, food_log: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -400,6 +484,7 @@ NUTRITIONAL ANALYSIS:"""
             "success": False,
             "intake_summary": intake_summary,
             "analysis_commentary": None,
+            "generation_metadata": {},
             "retrieved_docs": retrieved_docs,
             "prompt": prompt,
             "status_message": "",
@@ -410,12 +495,14 @@ NUTRITIONAL ANALYSIS:"""
         if self.client.is_configured():
             try:
                 params = {
-                    "max_new_tokens": 500,
+                    "max_new_tokens": 700,
                     "min_new_tokens": 20,
                     "temperature": 0.3,
                 }
-                raw_response = self.client.generate_response(prompt=prompt, params=params)
-                result["analysis_commentary"] = raw_response.strip()
+                raw_response, meta = self._call_client(prompt=prompt, params=params)
+                completed_response = self.ensure_complete_response(raw_response)
+                result["analysis_commentary"] = completed_response
+                result["generation_metadata"] = meta
                 result["success"] = True
                 result["used_live_model"] = True
                 result["status_message"] = "Dietary intake analysis successfully completed with IBM Granite 4.0."

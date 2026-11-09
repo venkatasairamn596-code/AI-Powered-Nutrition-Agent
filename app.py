@@ -456,6 +456,12 @@ def render_food_intake_analyzer(client: WatsonxGraniteClient):
                 st.write(f"**{entry['meal_type']}**")
             with c2:
                 st.write(entry["food_name"])
+                item_allergens = analyzer.identify_allergens(
+                    entry["food_name"],
+                    matched.get("aliases", []) if matched else None
+                )
+                if item_allergens:
+                    st.caption(f"⚠️ Allergen: {', '.join(item_allergens)}")
             with c3:
                 st.write(f"x{entry['portion']:.2f}")
             with c4:
@@ -525,10 +531,12 @@ def render_food_intake_analyzer(client: WatsonxGraniteClient):
         with st.expander("📋 Detailed Item-by-Item Breakdown & Traceable Sources", expanded=False):
             breakdown_data = []
             for b in intake["item_breakdowns"]:
+                allergen_str = ", ".join(b.get("allergens", [])) if b.get("allergens") else "None detected"
                 breakdown_data.append({
                     "Meal": b["meal_type"],
                     "Food Item": b["food_name"],
                     "Portion": f"x{b['portion']}",
+                    "Allergens": allergen_str,
                     "Calories (kcal)": f"{b['calories_kcal']} kcal" if b["matched"] else "Data unavailable (Excluded)",
                     "Protein (g)": f"{b['protein_g']} g" if b["matched"] else "Data unavailable (Excluded)",
                     "Carbs (g)": f"{b['carbohydrates_g']} g" if b["matched"] else "Data unavailable (Excluded)",
@@ -635,12 +643,12 @@ def render_general_health_advisor(client: WatsonxGraniteClient):
                     st.warning(result["safety_advisory"])
 
                 # Display Granite Answer
-                if result.get("answer"):
+                if result.get("success") and result.get("answer"):
                     st.subheader("🤖 Everyday Wellness Guidance (IBM Granite 4.0)")
                     st.markdown(result["answer"])
                     st.caption(f"Status: {result.get('status_message')}")
                 else:
-                    st.warning(f"Inference Notice: {result.get('status_message')}")
+                    st.error(f"Generation Notice: {result.get('status_message')}")
 
                 # Display Retrieved RAG Evidence
                 st.divider()

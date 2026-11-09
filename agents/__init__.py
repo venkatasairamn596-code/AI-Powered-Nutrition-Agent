@@ -8,10 +8,10 @@ Specialized Agent Implementations for Nutrition Agent:
 4. General Health & Nutrition Advisor (Feature 4)
 """
 
-from agents.nutrition_assistant import NutritionKnowledgeAssistant, SAFETY_DISCLAIMER
-from agents.diet_planner import PersonalisedDietPlanner, PLANNER_SAFETY_DISCLAIMER
-from agents.food_intake_analyzer import FoodIntakeAnalyzer, ANALYZER_SAFETY_DISCLAIMER
-from agents.general_health_advisor import GeneralHealthAdvisor, ADVISOR_SAFETY_DISCLAIMER
+from .nutrition_assistant import NutritionKnowledgeAssistant, SAFETY_DISCLAIMER
+from .diet_planner import PersonalisedDietPlanner, PLANNER_SAFETY_DISCLAIMER
+from .food_intake_analyzer import FoodIntakeAnalyzer, ANALYZER_SAFETY_DISCLAIMER
+from .general_health_advisor import GeneralHealthAdvisor, ADVISOR_SAFETY_DISCLAIMER
 
 __all__ = [
     "NutritionKnowledgeAssistant",
